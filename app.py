@@ -53,6 +53,19 @@ def firebase_login(email, password):
 
     r = requests.post(url, json=payload)
     return r.json()
+    
+def firebase_signup(email, password):
+    api_key = st.secrets["firebase"]["apiKey"]
+    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={api_key}"
+
+    payload = {
+        "email": email,
+        "password": password,
+        "returnSecureToken": True
+    }
+
+    r = requests.post(url, json=payload)
+    return r.json()
 
 @st.cache_data(show_spinner=True)
 def load_price_data(tickers, start_date, end_date=None):
@@ -845,6 +858,8 @@ def main():
 
         email = st.text_input("Email")
         password = st.text_input("Password", type="password")
+
+        mode = st.radio("Choose action", ["Login", "Create account"])
 
         if st.button("Login"):
             if not email or not password:

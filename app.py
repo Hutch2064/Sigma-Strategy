@@ -1,3 +1,4 @@
+import requests
 import numpy as np
 import pandas as pd
 import yfinance as yf
@@ -39,6 +40,19 @@ FIXED_MA_TYPE = "sma"  # or "ema" - you can choose which one to fix
 # ============================================================
 # DATA LOADING
 # ============================================================
+
+def firebase_login(email, password):
+    api_key = st.secrets["firebase"]["apiKey"]
+    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={api_key}"
+
+    payload = {
+        "email": email,
+        "password": password,
+        "returnSecureToken": True
+    }
+
+    r = requests.post(url, json=payload)
+    return r.json()
 
 @st.cache_data(show_spinner=True)
 def load_price_data(tickers, start_date, end_date=None):
@@ -819,6 +833,12 @@ def main():
     # -------------------------------
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
+    
+    if "id_token" not in st.session_state:
+    st.session_state.id_token = None
+
+    if "user_email" not in st.session_state:
+        st.session_state.user_email = None
 
     if not st.session_state.logged_in:
         st.title("Login")
@@ -827,8 +847,26 @@ def main():
         password = st.text_input("Password", type="password")
 
         if st.button("Login"):
-            st.session_state.logged_in = True
-            st.rerun()
+            if not email or not password:
+                st.error("Enter email and password.")
+            else:
+                resp = firebase_login(email, password)
+
+                if "error" in resp:
+                    msg = resp["error"].get("message", "Login failed.")
+                    pretty = {
+                        "INVALID_PASSWORD": "Invalid password.",
+                        "EMAIL_NOT_FOUND": "Email not found.",
+                        "USER_DISABLED": "User account disabled.",
+                        "INVALID_EMAIL": "Invalid email format.",
+                        "TOO_MANY_ATTEMPTS_TRY_LATER": "Too many attempts — try later.",
+                    }.get(msg, msg)
+                    st.error(pretty)
+                else:
+                    st.session_state.logged_in = True
+                    st.session_state.id_token = resp.get("idToken")
+                    st.session_state.user_email = resp.get("email")
+                    st.rerun()
 
         st.stop()
 

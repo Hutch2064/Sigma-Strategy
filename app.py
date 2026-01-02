@@ -967,7 +967,7 @@ def main():
     official_inception_date = st.sidebar.text_input(
         "Official Strategy Inception Date", 
         user_prefs["official_inception_date"],
-        help="The date when you officially started tracking this strategy. Performance after this date is considered 'official'."
+        help="The date when you officially implemented the Sigma strategy."
     )
 
     st.sidebar.header("Risk On Capital")

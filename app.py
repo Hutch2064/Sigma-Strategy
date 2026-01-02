@@ -70,7 +70,8 @@ class PortfolioPreferences:
             "real_cap_1": 10000,
             "end_date": "",  # Empty for current date
             "official_inception_date": "2025-12-22",  # ← ADD THIS LINE
-        }
+            "benchmark_ticker": "QQQ",
+        } 
     
     
     def load_preferences(self):
@@ -962,12 +963,19 @@ def main():
     # End date with saved preference
     end = st.sidebar.text_input("End Date (optional)", user_prefs["end_date"])
 
-    # OFFICIAL STRATEGY INCEPTION DATE - ADD THIS SECTION
+    # OFFICIAL STRATEGY INCEPTION DATE
     st.sidebar.header("Strategy Inception")
     official_inception_date = st.sidebar.text_input(
         "Official Strategy Inception Date", 
         user_prefs["official_inception_date"],
-        help="The date when you officially implemented the Sigma strategy."
+        help="The date when you officially started tracking this strategy. Performance after this date is considered 'official'."
+    )
+
+    # BENCHMARK TICKER - ADD THIS SECTION
+    benchmark_ticker = st.sidebar.text_input(
+        "Benchmark Ticker for Comparison", 
+        user_prefs["benchmark_ticker"],
+        help="Ticker to compare your strategy against (e.g., QQQ, SPY, VTI)"
     )
 
     st.sidebar.header("Risk On Capital")
@@ -1057,7 +1065,8 @@ def main():
                 "real_cap_1": real_cap_1,
                 "end_date": end,
                 "official_inception_date": official_inception_date,
-            }
+                "benchmark_ticker": benchmark_ticker,
+             }
             
             # Save to user's file
             if portfolio_prefs.save_preferences(preferences):
@@ -1276,10 +1285,15 @@ def main():
     bh_eq_si = risk_on_eq.loc[risk_on_eq.index >= inception]
     bh_ret_si = bh_eq_si.pct_change().fillna(0)
 
-    # --- QQQ ---
-    qqq_px = load_price_data(["QQQ"], inception)
-    qqq_eq_si = (qqq_px["QQQ"] / qqq_px["QQQ"].iloc[0]).reindex(sigma_eq_si.index).ffill()
-    qqq_ret_si = qqq_eq_si.pct_change().fillna(0)
+    # --- Benchmark ---
+    benchmark_px = load_price_data([benchmark_ticker], inception)
+    if not benchmark_px.empty and benchmark_ticker in benchmark_px.columns:
+        benchmark_eq_si = (benchmark_px[benchmark_ticker] / benchmark_px[benchmark_ticker].iloc[0]).reindex(sigma_eq_si.index).ffill()
+        benchmark_ret_si = benchmark_eq_si.pct_change().fillna(0)
+    else:
+        benchmark_eq_si = pd.Series(1.0, index=sigma_eq_si.index)
+        benchmark_ret_si = pd.Series(0.0, index=sigma_eq_si.index)
+        st.warning(f"Could not load benchmark data for {benchmark_ticker}")
     
     # ============================================================
     # SINCE-INCEPTION EQUITY CURVE
@@ -1304,8 +1318,8 @@ def main():
     )
 
     ax.plot(
-        qqq_eq_si,
-        label="QQQ",
+        benchmark_eq_si,
+        label=benchmark_ticker,
         linewidth=2,
         linestyle="--",
         color="black",
@@ -1325,7 +1339,7 @@ def main():
 
     sigma_perf_si = compute_enhanced_performance(sigma_ret_si, sigma_eq_si)
     bh_perf_si    = compute_enhanced_performance(bh_ret_si, bh_eq_si)
-    qqq_perf_si   = compute_enhanced_performance(qqq_ret_si, qqq_eq_si)
+    benchmark_perf_si = compute_enhanced_performance(benchmark_ret_si, benchmark_eq_si)
 
     rows = [
         ("CAGR", "CAGR", "pct"),
@@ -1349,12 +1363,12 @@ def main():
             label,
             fmt(sigma_perf_si[key], kind),
             fmt(bh_perf_si[key], kind),
-            fmt(qqq_perf_si[key], kind),
+            fmt(benchmark_perf_si[key], kind),  # ← CHANGED
         ])
 
     si_table = pd.DataFrame(
         table_data,
-        columns=["Metric", "Sigma", "Buy & Hold", "QQQ"]
+        columns=["Metric", "Sigma", "Buy & Hold", benchmark_ticker]
     )
 
     st.subheader("📊 Since-Inception Performance Metrics")

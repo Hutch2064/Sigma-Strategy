@@ -1889,7 +1889,7 @@ def main():
                     
                         
                         # Monte Carlo assumptions disclaimer
-                        st.info("""
+        st.info("""
                         **Monte Carlo Simulation Assumptions:**
                         - Based on historical return distributions (parametric bootstrap)
                         - Assumes future volatility similar to historical

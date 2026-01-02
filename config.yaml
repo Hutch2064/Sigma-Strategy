@@ -14,6 +14,7 @@ credentials:
         qs_cap_1: 10000
         real_cap_1: 10000
         official_inception_date: "2025-12-22"
+        benchmark_ticker: "QQQ"
         last_saved: "2024-01-01T00:00:00"
 
 cookie:

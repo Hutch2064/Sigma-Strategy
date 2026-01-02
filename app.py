@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import streamlit as st
 import datetime
 from scipy.optimize import minimize
+from streamlit_cookies_manager import EncryptedCookieManager
 
 # ============================================================
 # CONFIG
@@ -938,6 +939,14 @@ def main():
 
     st.set_page_config(page_title="Portfolio MA Regime Strategy", layout="wide")
     st.title("Portfolio Strategy")
+    
+    cookies = EncryptedCookieManager(
+        prefix="sigma_auth",
+        password=st.secrets["firebase"]["apiKey"],  # encryption key
+    )
+
+    if not cookies.ready():
+        st.stop()
     
     # -------------------------------
     # LOGOUT CONTROL (AUTHENTICATED)

@@ -1,4 +1,3 @@
-import requests
 import numpy as np
 import pandas as pd
 import yfinance as yf
@@ -6,66 +5,39 @@ import matplotlib.pyplot as plt
 import streamlit as st
 import datetime
 from scipy.optimize import minimize
-import json
-import base64
+import yaml
+from yaml.loader import SafeLoader
+import streamlit_authenticator as stauth
 
 # ============================================================
-# LOCAL STORAGE HELPER FUNCTIONS
+# AUTHENTICATION SETUP
 # ============================================================
 
-def save_to_local_storage(key, value):
-    """Save data to browser's localStorage via JavaScript"""
-    js_code = f"""
-    <script>
-    localStorage.setItem('{key}', '{value}');
-    </script>
-    """
-    st.components.v1.html(js_code, height=0)
+def setup_authentication():
+    """Set up authentication using streamlit-authenticator"""
+    try:
+        # Load configuration from YAML file
+        with open('config.yaml') as file:
+            config = yaml.load(file, Loader=SafeLoader)
+        
+        # Create authenticator object
+        authenticator = stauth.Authenticate(
+            config['credentials'],
+            config['cookie']['name'],
+            config['cookie']['key'],
+            config['cookie']['expiry_days'],
+            config['preauthorized']
+        )
+        return authenticator, config
+    except FileNotFoundError:
+        st.error("Configuration file 'config.yaml' not found. Please create it first.")
+        st.stop()
+    except Exception as e:
+        st.error(f"Error loading authentication configuration: {e}")
+        st.stop()
 
-def get_from_local_storage(key):
-    """Get data from browser's localStorage via JavaScript"""
-    js_code = f"""
-    <script>
-    var value = localStorage.getItem('{key}');
-    if (value) {{
-        window.parent.postMessage({{'type': 'localStorage', 'key': '{key}', 'value': value}}, '*');
-    }}
-    </script>
-    """
-    st.components.v1.html(js_code, height=0)
-    return None  # Value will come via message handler
-
-def encode_token(token):
-    """Simple encoding for storing tokens"""
-    if token:
-        return base64.b64encode(token.encode()).decode()
-    return None
-
-def decode_token(encoded_token):
-    """Decode encoded token"""
-    if encoded_token:
-        try:
-            return base64.b64decode(encoded_token.encode()).decode()
-        except:
-            return None
-    return None
-
-def init_session_state():
-    """Initialize all session state variables"""
-    if "logged_in" not in st.session_state:
-        st.session_state.logged_in = False
-    if "id_token" not in st.session_state:
-        st.session_state.id_token = None
-    if "user_email" not in st.session_state:
-        st.session_state.user_email = None
-    if "refresh_token" not in st.session_state:
-        st.session_state.refresh_token = None
-    if "auth_initialized" not in st.session_state:
-        st.session_state.auth_initialized = False
-    if "tokens_loaded" not in st.session_state:
-        st.session_state.tokens_loaded = False
-    if "saved_preferences" not in st.session_state:  # ADDED: For user preferences
-        st.session_state.saved_preferences = None
+# Initialize authentication
+authenticator, config = setup_authentication()
 
 # ============================================================
 # CONFIG
@@ -96,200 +68,9 @@ START_SAFE  = 0.4
 FIXED_MA_LENGTH = 200
 FIXED_MA_TYPE = "sma"  # or "ema" - you can choose which one to fix
 
-
 # ============================================================
 # DATA LOADING
 # ============================================================
-
-def firebase_login(email, password):
-    api_key = st.secrets["firebase"]["apiKey"]
-    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={api_key}"
-
-    payload = {
-        "email": email,
-        "password": password,
-        "returnSecureToken": True
-    }
-
-    r = requests.post(url, json=payload)
-    return r.json()
-
-def firebase_signup(email, password):
-    """Sign up new user - KEEP ONLY THIS ONE (removed duplicates)"""
-    api_key = st.secrets["firebase"]["apiKey"]
-    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={api_key}"
-
-    payload = {
-        "email": email,
-        "password": password,
-        "returnSecureToken": True
-    }
-
-    try:
-        r = requests.post(url, json=payload)
-        return r.json()
-    except Exception as e:
-        return {"error": {"message": f"Connection error: {str(e)}"}}
-
-def firebase_refresh(refresh_token):
-    api_key = st.secrets["firebase"]["apiKey"]
-    url = f"https://securetoken.googleapis.com/v1/token?key={api_key}"
-
-    payload = {
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token,
-    }
-
-    r = requests.post(url, data=payload)
-    return r.json()
-
-def firestore_create_user(id_token, email):
-    """Create initial user document with default preferences"""
-    project_id = st.secrets["firebase"]["projectId"]
-    
-    # Create user ID from email
-    import re
-    user_id = re.sub(r'[^a-zA-Z0-9]', '_', email)
-    
-    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
-    
-    headers = {
-        "Authorization": f"Bearer {id_token}",
-        "Content-Type": "application/json",
-    }
-    
-    # Default user preferences
-    payload = {
-        "fields": {
-            "email": {"stringValue": email},
-            "created_at": {"timestampValue": datetime.datetime.utcnow().isoformat() + "Z"},
-            "last_login": {"timestampValue": datetime.datetime.utcnow().isoformat() + "Z"},
-            "role": {"stringValue": "user"},
-            "preferences": {
-                "mapValue": {
-                    "fields": {
-                        "start_date": {"stringValue": DEFAULT_START_DATE},
-                        "risk_on_tickers": {"stringValue": ",".join(RISK_ON_WEIGHTS.keys())},
-                        "risk_on_weights": {"stringValue": ",".join(str(w) for w in RISK_ON_WEIGHTS.values())},
-                        "risk_off_tickers": {"stringValue": ",".join(RISK_OFF_WEIGHTS.keys())},
-                        "risk_off_weights": {"stringValue": ",".join(str(w) for w in RISK_OFF_WEIGHTS.values())},
-                        "annual_drag_pct": {"doubleValue": 0.0},
-                        "qs_cap_1": {"doubleValue": 75815.26},
-                        "qs_cap_2": {"doubleValue": 10074.83},
-                        "qs_cap_3": {"doubleValue": 4189.76},
-                        "real_cap_1": {"doubleValue": 68832.42},
-                        "real_cap_2": {"doubleValue": 9265.91},
-                        "real_cap_3": {"doubleValue": 3930.23},
-                        "last_updated": {"timestampValue": datetime.datetime.utcnow().isoformat() + "Z"}
-                    }
-                }
-            }
-        }
-    }
-    
-    response = requests.patch(url, headers=headers, json=payload)
-    
-    if response.status_code == 200:
-        return response
-    else:
-        # Try POST as fallback
-        try:
-            response = requests.post(
-                f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users?documentId={user_id}",
-                headers=headers,
-                json={"fields": payload["fields"]}
-            )
-            return response
-        except:
-            return None
-
-def save_user_preferences(id_token, user_email, preferences_dict):
-    """Save user portfolio preferences to Firestore"""
-    project_id = st.secrets["firebase"]["projectId"]
-    
-    # Create user ID from email
-    import re
-    user_id = re.sub(r'[^a-zA-Z0-9]', '_', user_email)
-    
-    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
-    
-    headers = {
-        "Authorization": f"Bearer {id_token}",
-        "Content-Type": "application/json",
-    }
-    
-    # Convert preferences to Firestore format
-    pref_fields = {}
-    for key, value in preferences_dict.items():
-        if isinstance(value, (int, float)):
-            pref_fields[key] = {"doubleValue": float(value)}
-        elif isinstance(value, bool):
-            pref_fields[key] = {"booleanValue": value}
-        else:
-            pref_fields[key] = {"stringValue": str(value)}
-    
-    # Add timestamp
-    pref_fields["last_updated"] = {"timestampValue": datetime.datetime.utcnow().isoformat() + "Z"}
-    
-    payload = {
-        "fields": {
-            "preferences": {
-                "mapValue": {
-                    "fields": pref_fields
-                }
-            },
-            "last_login": {"timestampValue": datetime.datetime.utcnow().isoformat() + "Z"}
-        }
-    }
-    
-    try:
-        response = requests.patch(url, headers=headers, json=payload)
-        return response.status_code == 200
-    except:
-        return False
-
-def load_user_preferences(id_token, user_email):
-    """Load user portfolio preferences from Firestore"""
-    project_id = st.secrets["firebase"]["projectId"]
-    
-    # Create user ID from email
-    import re
-    user_id = re.sub(r'[^a-zA-Z0-9]', '_', user_email)
-    
-    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
-    
-    headers = {
-        "Authorization": f"Bearer {id_token}",
-        "Content-Type": "application/json",
-    }
-    
-    try:
-        response = requests.get(url, headers=headers)
-        
-        if response.status_code == 200:
-            data = response.json()
-            
-            # Check if preferences exist
-            if "fields" in data and "preferences" in data["fields"]:
-                pref_data = data["fields"]["preferences"]["mapValue"]["fields"]
-                
-                # Convert Firestore format to Python dict
-                preferences = {}
-                for key, value_obj in pref_data.items():
-                    if "stringValue" in value_obj:
-                        preferences[key] = value_obj["stringValue"]
-                    elif "doubleValue" in value_obj:
-                        preferences[key] = float(value_obj["doubleValue"])
-                    elif "booleanValue" in value_obj:
-                        preferences[key] = value_obj["booleanValue"]
-                    elif "integerValue" in value_obj:
-                        preferences[key] = int(value_obj["integerValue"])
-                
-                return preferences
-        
-        return None  # No preferences found
-    except:
-        return None
 
 @st.cache_data(show_spinner=True)
 def load_price_data(tickers, start_date, end_date=None):
@@ -1064,297 +845,33 @@ def plot_monte_carlo_results(results_dict, strategy_names):
 # ============================================================
 
 def main():
-    # Check if secrets are available
-    if "firebase" not in st.secrets:
-        st.error("Firebase configuration not found in secrets. Please check your secrets.toml file.")
-        st.stop()
-    
-    if "apiKey" not in st.secrets["firebase"]:
-        st.error("Firebase API key not found in secrets.")
-        st.stop()
-    
     st.set_page_config(page_title="Portfolio MA Regime Strategy", layout="wide")
     
-    # -------------------------------
-    # SESSION STATE INITIALIZATION
-    # -------------------------------
-    init_session_state()
+    # ============================================================
+    # SIMPLE AUTHENTICATION
+    # ============================================================
     
-    # -------------------------------
-    # LOAD TOKENS FROM LOCAL STORAGE (ONCE)
-    # -------------------------------
-    if not st.session_state.tokens_loaded:
-        # Try to load from query params (sent from JavaScript)
-        query_params = st.query_params
-        
-        if "refresh_token" in query_params and "user_email" in query_params:
-            try:
-                # Decode the tokens
-                refresh_token = decode_token(query_params["refresh_token"])
-                user_email = decode_token(query_params["user_email"])
-                
-                if refresh_token and user_email:
-                    st.session_state.refresh_token = refresh_token
-                    st.session_state.user_email = user_email
-                    st.session_state.tokens_loaded = True
-                    
-                    # Clear query params
-                    st.query_params.clear()
-                    
-                    # Try to refresh token
-                    try:
-                        with st.spinner("Restoring your session..."):
-                            refreshed = firebase_refresh(refresh_token)
-                            
-                            if "id_token" in refreshed:
-                                st.session_state.logged_in = True
-                                st.session_state.id_token = refreshed["id_token"]
-                                st.session_state.refresh_token = refreshed["refresh_token"]
-                                
-                                # Save updated tokens
-                                save_to_local_storage(
-                                    "refresh_token", 
-                                    encode_token(refreshed["refresh_token"])
-                                )
-                                save_to_local_storage(
-                                    "user_email", 
-                                    encode_token(user_email)
-                                )
-                                
-                                st.rerun()
-                            else:
-                                # Refresh failed, clear tokens
-                                st.session_state.refresh_token = None
-                                st.session_state.user_email = None
-                    except:
-                        # Refresh failed
-                        st.session_state.refresh_token = None
-                        st.session_state.user_email = None
-            except:
-                # Failed to decode
-                pass
+    # Show login form
+    name, authentication_status, username = authenticator.login('Login', 'main')
     
-    # -------------------------------
-    # INJECT JAVASCRIPT TO LOAD TOKENS
-    # -------------------------------
-    if not st.session_state.tokens_loaded and not st.session_state.logged_in:
-        # Inject JavaScript to check localStorage and redirect with tokens
-        js_code = """
-        <script>
-        // Check if we have tokens in localStorage
-        var refreshToken = localStorage.getItem('refresh_token');
-        var userEmail = localStorage.getItem('user_email');
-        
-        if (refreshToken && userEmail) {
-            // We have tokens, redirect with them in query params
-            var currentUrl = window.location.href;
-            var separator = currentUrl.includes('?') ? '&' : '?';
-            var newUrl = currentUrl + separator + 
-                        'refresh_token=' + encodeURIComponent(refreshToken) + 
-                        '&user_email=' + encodeURIComponent(userEmail);
-            window.location.href = newUrl;
-        }
-        </script>
-        """
-        st.components.v1.html(js_code, height=0)
+    # Handle authentication
+    if authentication_status == False:
+        st.error('Username/password is incorrect')
+        st.stop()
     
-    # -------------------------------
-    # LOGIN GATE
-    # -------------------------------
-    if not st.session_state.logged_in:
-        # Clear any previous error state
-        if "auth_error" in st.session_state:
-            del st.session_state.auth_error
-        
-        # Center the login form
-        col1, col2, col3 = st.columns([1, 2, 1])
-        
-        with col2:
-            st.title("🔐 Portfolio Strategy Login")
-            
-            # Create tabs for Login and Signup
-            tab1, tab2 = st.tabs(["Login", "Create Account"])
-            
-            # LOGIN TAB
-            with tab1:
-                with st.form("login_form"):
-                    st.subheader("Login to Your Account")
-                    login_email = st.text_input("Email", key="login_email")
-                    login_password = st.text_input("Password", type="password", key="login_password")
-                    remember_me = st.checkbox("Remember me", value=True, help="Stay logged in for 30 days")
-                    login_submitted = st.form_submit_button("Login", type="primary", use_container_width=True)
-                    
-                    if login_submitted:
-                        if not login_email or not login_password:
-                            st.error("Please enter both email and password.")
-                        else:
-                            with st.spinner("Authenticating..."):
-                                resp = firebase_login(login_email, login_password)
-                                
-                                if "error" in resp:
-                                    msg = resp["error"].get("message", "Authentication failed.")
-                                    pretty = {
-                                        "EMAIL_EXISTS": "Account already exists. Try logging in.",
-                                        "INVALID_PASSWORD": "Invalid password.",
-                                        "EMAIL_NOT_FOUND": "Email not found.",
-                                        "INVALID_EMAIL": "Invalid email format.",
-                                    }.get(msg, f"Error: {msg}")
-                                    st.error(pretty)
-                                else:
-                                    st.session_state.logged_in = True
-                                    st.session_state.id_token = resp.get("idToken")
-                                    st.session_state.refresh_token = resp.get("refreshToken")
-                                    st.session_state.user_email = resp.get("email")
-                                    
-                                    # Create or update user in Firestore
-                                    firestore_create_user(
-                                        st.session_state.id_token,
-                                        st.session_state.user_email
-                                    )
-                                    
-                                    # Load saved preferences
-                                    saved_prefs = load_user_preferences(
-                                        st.session_state.id_token,
-                                        st.session_state.user_email
-                                    )
-                                    
-                                    if saved_prefs:
-                                        st.session_state.saved_preferences = saved_prefs
-                                        st.success(f"✅ Welcome back! Loaded your saved portfolio settings.")
-                                    else:
-                                        st.session_state.saved_preferences = None
-                                        st.success(f"✅ Welcome {resp.get('email')}!")
-                                    
-                                    # Save to localStorage if remember me is checked
-                                    if remember_me:
-                                        save_to_local_storage(
-                                            "refresh_token", 
-                                            encode_token(resp.get("refreshToken"))
-                                        )
-                                        save_to_local_storage(
-                                            "user_email", 
-                                            encode_token(resp.get("email"))
-                                        )
-                                    
-                                    st.rerun()
-            
-            # SIGNUP TAB
-            with tab2:
-                with st.form("signup_form"):
-                    st.subheader("Create New Account")
-                    signup_email = st.text_input("Email", key="signup_email")
-                    signup_password = st.text_input("Password", type="password", key="signup_password")
-                    confirm_password = st.text_input("Confirm Password", type="password", key="confirm_password")
-                    remember_me_signup = st.checkbox("Remember me", value=True, help="Stay logged in for 30 days")
-                    signup_submitted = st.form_submit_button("Create Account", type="primary", use_container_width=True)
-                    
-                    if signup_submitted:
-                        if not signup_email or not signup_password or not confirm_password:
-                            st.error("Please fill in all fields.")
-                        elif signup_password != confirm_password:
-                            st.error("Passwords do not match.")
-                        elif len(signup_password) < 6:
-                            st.error("Password must be at least 6 characters.")
-                        else:
-                            with st.spinner("Creating account..."):
-                                resp = firebase_signup(signup_email, signup_password)
-                                
-                                if "error" in resp:
-                                    msg = resp["error"].get("message", "Signup failed.")
-                                    pretty = {
-                                        "EMAIL_EXISTS": "Email already exists. Please login instead.",
-                                        "WEAK_PASSWORD": "Password should be at least 6 characters.",
-                                        "INVALID_EMAIL": "Invalid email format.",
-                                    }.get(msg, f"Error: {msg}")
-                                    st.error(pretty)
-                                else:
-                                    # Auto-login after successful signup
-                                    st.session_state.logged_in = True
-                                    st.session_state.id_token = resp.get("idToken")
-                                    st.session_state.refresh_token = resp.get("refreshToken")
-                                    st.session_state.user_email = resp.get("email")
-                                    
-                                    # Create user in Firestore with default preferences
-                                    firestore_create_user(
-                                        st.session_state.id_token,
-                                        st.session_state.user_email
-                                    )
-                                    
-                                    # Load saved preferences (will be defaults for new user)
-                                    saved_prefs = load_user_preferences(
-                                        st.session_state.id_token,
-                                        st.session_state.user_email
-                                    )
-                                    
-                                    if saved_prefs:
-                                        st.session_state.saved_preferences = saved_prefs
-                                    else:
-                                        st.session_state.saved_preferences = None
-                            
-                                    # Save to localStorage if remember me is checked
-                                    if remember_me_signup:
-                                        save_to_local_storage(
-                                            "refresh_token", 
-                                            encode_token(resp.get("refreshToken"))
-                                        )
-                                        save_to_local_storage(
-                                            "user_email", 
-                                            encode_token(resp.get("email"))
-                                        )
-                                    
-                                    st.success("✅ Account created successfully! Default settings loaded.")
-                                    st.info("Please check your email for verification if required.")
-                                    st.rerun()
-            
-            # Add some helpful info and clear localStorage option
-            st.markdown("---")
-            
-            # Clear localStorage button
-            if st.button("Clear Saved Login", type="secondary"):
-                clear_js = """
-                <script>
-                localStorage.removeItem('refresh_token');
-                localStorage.removeItem('user_email');
-                alert('Saved login cleared!');
-                </script>
-                """
-                st.components.v1.html(clear_js, height=0)
-                st.success("Saved login cleared!")
-            
-            st.info("""
-            **Note:** 
-            - Check "Remember me" to stay logged in for 30 days
-            - Use "Clear Saved Login" if you're on a shared computer
-            - Your credentials are stored securely in your browser only
-            """)
-        
-        st.stop()  # Stop execution if not logged in
+    if authentication_status == None:
+        # Show signup option
+        if st.button("Don't have an account? Sign up"):
+            st.switch_page("pages/signup.py")
+        st.stop()
     
-    # -------------------------------
-    # LOGOUT CONTROL (AUTHENTICATED)
-    # -------------------------------
-    st.sidebar.markdown("---")
-    st.sidebar.write(f"👤 Logged in as: **{st.session_state.user_email}**")
+    # If we get here, user is authenticated!
+    st.sidebar.title(f"Welcome {name}!")
     
-    if st.sidebar.button("🚪 Logout", type="secondary"):
-        # Clear localStorage
-        clear_js = """
-        <script>
-        localStorage.removeItem('refresh_token');
-        localStorage.removeItem('user_email');
-        </script>
-        """
-        st.components.v1.html(clear_js, height=0)
-        
-        # Clear session state
-        st.session_state.logged_in = False
-        st.session_state.id_token = None
-        st.session_state.user_email = None
-        st.session_state.refresh_token = None
-        st.session_state.tokens_loaded = False
-        
-        st.success("Logged out successfully!")
-        st.rerun() 
+    # Logout button
+    if st.sidebar.button("Logout"):
+        authenticator.logout('Logout', 'main')
+        st.rerun()
     
     # ============================================================
     # OFFICIAL STRATEGY INCEPTION & LIVE PERFORMANCE SNAPSHOT
@@ -1366,51 +883,38 @@ def main():
     )
 
     # ============================================================
-    # LOAD SAVED PREFERENCES FOR SIDEBAR INPUTS
+    # SIDEBAR INPUTS
     # ============================================================
     
-    # Get saved preferences if user is logged in
-    saved_prefs = None
-    if st.session_state.logged_in and st.session_state.saved_preferences:
-        saved_prefs = st.session_state.saved_preferences
-    
     # Start date with saved preference
-    default_start = saved_prefs.get("start_date", DEFAULT_START_DATE) if saved_prefs else DEFAULT_START_DATE
-    start = st.sidebar.text_input("Start Date", default_start)
+    start = st.sidebar.text_input("Start Date", DEFAULT_START_DATE)
     end = st.sidebar.text_input("End Date (optional)", "")
 
     st.sidebar.header("Risk On Capital")
     # Risk On tickers with saved preference
-    default_risk_on_tickers = saved_prefs.get("risk_on_tickers", ",".join(RISK_ON_WEIGHTS.keys())) if saved_prefs else ",".join(RISK_ON_WEIGHTS.keys())
-    default_risk_on_weights = saved_prefs.get("risk_on_weights", ",".join(str(w) for w in RISK_ON_WEIGHTS.values())) if saved_prefs else ",".join(str(w) for w in RISK_ON_WEIGHTS.values())
-    
     risk_on_tickers_str = st.sidebar.text_input(
-        "Tickers", default_risk_on_tickers
+        "Tickers", ",".join(RISK_ON_WEIGHTS.keys())
     )
     risk_on_weights_str = st.sidebar.text_input(
-        "Weights", default_risk_on_weights
+        "Weights", ",".join(str(w) for w in RISK_ON_WEIGHTS.values())
     )
 
     st.sidebar.header("Risk Off Capital")
     # Risk Off tickers with saved preference
-    default_risk_off_tickers = saved_prefs.get("risk_off_tickers", ",".join(RISK_OFF_WEIGHTS.keys())) if saved_prefs else ",".join(RISK_OFF_WEIGHTS.keys())
-    default_risk_off_weights = saved_prefs.get("risk_off_weights", ",".join(str(w) for w in RISK_OFF_WEIGHTS.values())) if saved_prefs else ",".join(str(w) for w in RISK_OFF_WEIGHTS.values())
-    
     risk_off_tickers_str = st.sidebar.text_input(
-        "Tickers", default_risk_off_tickers
+        "Tickers", ",".join(RISK_OFF_WEIGHTS.keys())
     )
     risk_off_weights_str = st.sidebar.text_input(
-        "Weights", default_risk_off_weights
+        "Weights", ",".join(str(w) for w in RISK_OFF_WEIGHTS.values())
     )
     
     # PORTFOLIO DRAG INPUT
     st.sidebar.header("Portfolio Drag")
-    default_drag = saved_prefs.get("annual_drag_pct", 0.0) if saved_prefs else 0.0
     annual_drag_pct = st.sidebar.number_input(
         "Annual Portfolio Drag (%)", 
         min_value=0.0, 
         max_value=20.0, 
-        value=float(default_drag),  # Use saved value
+        value=0.0,
         step=0.1,
         format="%.1f",
         help="Annual decay/drag applied to entire portfolio. Use ~4.0% for leveraged ETFs."
@@ -1421,23 +925,15 @@ def main():
     
     st.sidebar.header("Quarterly Portfolio Values")
     # Portfolio values with saved preferences
-    default_qs_cap_1 = saved_prefs.get("qs_cap_1", 75815.26) if saved_prefs else 75815.26
-    default_qs_cap_2 = saved_prefs.get("qs_cap_2", 10074.83) if saved_prefs else 10074.83
-    default_qs_cap_3 = saved_prefs.get("qs_cap_3", 4189.76) if saved_prefs else 4189.76
-    
-    qs_cap_1 = st.sidebar.number_input("Taxable – Portfolio Value at Last Rebalance ($)", min_value=0.0, value=float(default_qs_cap_1), step=100.0)
-    qs_cap_2 = st.sidebar.number_input("Tax-Sheltered – Portfolio Value at Last Rebalance ($)", min_value=0.0, value=float(default_qs_cap_2), step=100.0)
-    qs_cap_3 = st.sidebar.number_input("Joint – Portfolio Value at Last Rebalance ($)", min_value=0.0, value=float(default_qs_cap_3), step=100.0)
+    qs_cap_1 = st.sidebar.number_input("Taxable – Portfolio Value at Last Rebalance ($)", min_value=0.0, value=75815.26, step=100.0)
+    qs_cap_2 = st.sidebar.number_input("Tax-Sheltered – Portfolio Value at Last Rebalance ($)", min_value=0.0, value=10074.83, step=100.0)
+    qs_cap_3 = st.sidebar.number_input("Joint – Portfolio Value at Last Rebalance ($)", min_value=0.0, value=4189.76, step=100.0)
 
     st.sidebar.header("Current Portfolio Values (Today)")
     # Current portfolio values with saved preferences
-    default_real_cap_1 = saved_prefs.get("real_cap_1", 68832.42) if saved_prefs else 68832.42
-    default_real_cap_2 = saved_prefs.get("real_cap_2", 9265.91) if saved_prefs else 9265.91
-    default_real_cap_3 = saved_prefs.get("real_cap_3", 3930.23) if saved_prefs else 3930.23
-    
-    real_cap_1 = st.sidebar.number_input("Taxable – Portfolio Value Today ($)", min_value=0.0, value=float(default_real_cap_1), step=100.0)
-    real_cap_2 = st.sidebar.number_input("Tax-Sheltered – Portfolio Value Today ($)", min_value=0.0, value=float(default_real_cap_2), step=100.0)
-    real_cap_3 = st.sidebar.number_input("Joint – Portfolio Value Today ($)", min_value=0.0, value=float(default_real_cap_3), step=100.0)
+    real_cap_1 = st.sidebar.number_input("Taxable – Portfolio Value Today ($)", min_value=0.0, value=68832.42, step=100.0)
+    real_cap_2 = st.sidebar.number_input("Tax-Sheltered – Portfolio Value Today ($)", min_value=0.0, value=9265.91, step=100.0)
+    real_cap_3 = st.sidebar.number_input("Joint – Portfolio Value Today ($)", min_value=0.0, value=3930.23, step=100.0)
 
     # Add fixed parameters display
     st.sidebar.header("Fixed Parameters")
@@ -1446,40 +942,53 @@ def main():
     st.sidebar.write(f"**Portfolio Drag:** {annual_drag_pct:.1f}% annual")
     
     # ============================================================
-    # SAVE SETTINGS BUTTON
+    # SAVE SETTINGS BUTTON (Simple version - saves to session state)
     # ============================================================
-    if st.session_state.logged_in:
-        st.sidebar.markdown("---")
-        if st.sidebar.button("💾 Save Current Settings", type="primary"):
-            # Collect all current settings
-            preferences = {
-                "start_date": start,
-                "risk_on_tickers": risk_on_tickers_str,
-                "risk_on_weights": risk_on_weights_str,
-                "risk_off_tickers": risk_off_tickers_str,
-                "risk_off_weights": risk_off_weights_str,
-                "annual_drag_pct": annual_drag_pct,
-                "qs_cap_1": qs_cap_1,
-                "qs_cap_2": qs_cap_2,
-                "qs_cap_3": qs_cap_3,
-                "real_cap_1": real_cap_1,
-                "real_cap_2": real_cap_2,
-                "real_cap_3": real_cap_3,
-            }
-            
-            # Save to Firestore
-            success = save_user_preferences(
-                st.session_state.id_token,
-                st.session_state.user_email,
-                preferences
-            )
-            
-            if success:
-                st.sidebar.success("✅ Settings saved to your account!")
-                # Update session state
-                st.session_state.saved_preferences = preferences
-            else:
-                st.sidebar.error("❌ Failed to save settings")
+    st.sidebar.markdown("---")
+    
+    # Initialize session state for preferences
+    if "user_preferences" not in st.session_state:
+        st.session_state.user_preferences = {}
+    
+    if st.sidebar.button("💾 Save Current Settings", type="primary"):
+        # Collect all current settings
+        preferences = {
+            "start_date": start,
+            "risk_on_tickers": risk_on_tickers_str,
+            "risk_on_weights": risk_on_weights_str,
+            "risk_off_tickers": risk_off_tickers_str,
+            "risk_off_weights": risk_off_weights_str,
+            "annual_drag_pct": annual_drag_pct,
+            "qs_cap_1": qs_cap_1,
+            "qs_cap_2": qs_cap_2,
+            "qs_cap_3": qs_cap_3,
+            "real_cap_1": real_cap_1,
+            "real_cap_2": real_cap_2,
+            "real_cap_3": real_cap_3,
+        }
+        
+        # Save to session state
+        st.session_state.user_preferences = preferences
+        st.sidebar.success("✅ Settings saved for this session!")
+    
+    # Load preferences from session state if available
+    if st.session_state.user_preferences:
+        pref = st.session_state.user_preferences
+        if st.sidebar.button("📥 Load Saved Settings"):
+            # Note: In Streamlit, we can't directly update widgets
+            # So we show the values and let user copy them
+            st.sidebar.info("""
+            **Saved Settings:**
+            - Start Date: {}
+            - Risk On Tickers: {}
+            - Risk Off Tickers: {}
+            - Drag: {:.1f}%
+            """.format(
+                pref.get("start_date", DEFAULT_START_DATE),
+                pref.get("risk_on_tickers", ",".join(RISK_ON_WEIGHTS.keys())),
+                pref.get("risk_off_tickers", ",".join(RISK_OFF_WEIGHTS.keys())),
+                pref.get("annual_drag_pct", 0.0)
+            ))
     
     run_clicked = st.sidebar.button("Run Backtest")
     if not run_clicked:

@@ -856,20 +856,20 @@ def main():
     if not st.session_state.logged_in:
         st.title("Login")
 
-        email = st.text_input("Email")
-        password = st.text_input("Password", type="password")
+        with st.form("auth_form"):
+            email = st.text_input("Email")
+            password = st.text_input("Password", type="password")
+            action = st.radio("Choose action", ["Login", "Create account"])
+            submitted = st.form_submit_button(action)
 
-        action = st.radio("Choose action", ["Login", "Create account"])
-
-        if st.button(action):
+        if submitted:
             if not email or not password:
                 st.error("Enter email and password.")
                 st.stop()
 
             if action == "Login":
                 resp = firebase_login(email, password)
-
-            else:  # Create account
+            else:
                 api_key = st.secrets["firebase"]["apiKey"]
                 url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={api_key}"
 

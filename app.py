@@ -1,30 +1,26 @@
 import streamlit as st
-from simple_auth import show_auth_page
-
-# ============================================================
-# AUTHENTICATION - ADD THIS AT THE VERY TOP
-# ============================================================
-
-# Show auth page - this will stop execution if not authenticated
-user = show_auth_page()
-
-# Now show logout button in sidebar if authenticated
-if user:
-    st.sidebar.markdown(f"**Welcome, {user['full_name']}**")
-    st.sidebar.markdown(f"*{user['email']}*")
-    
-    if st.sidebar.button("Logout"):
-        st.session_state.authenticated = False
-        st.session_state.user = None
-        st.rerun()
-
 import numpy as np
 import pandas as pd
 import yfinance as yf
 import matplotlib.pyplot as plt
-import streamlit as st
 import datetime
 from scipy.optimize import minimize
+
+# ============================================================
+# SIMPLE NO-AUTH VERSION - WE'LL ADD AUTH LATER
+# ============================================================
+
+st.set_page_config(page_title="SigmaTrader", layout="wide")
+
+# Add a header explaining this is a demo
+st.title("📈 SigmaTrader - Portfolio Strategy")
+st.markdown("""
+<div style='background-color: #f0f2f6; padding: 20px; border-radius: 10px; margin-bottom: 20px;'>
+<h3>🚀 Welcome to SigmaTrader!</h3>
+<p>This is a <strong>demo version</strong> without authentication.</p>
+<p><em>Authentication and user accounts coming soon!</em></p>
+</div>
+""", unsafe_allow_html=True)
 
 # ============================================================
 # CONFIG

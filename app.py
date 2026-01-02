@@ -8,6 +8,7 @@ import datetime
 from scipy.optimize import minimize
 import json
 import base64
+from datetime import datetime, timezone
 
 # ============================================================
 # LOCAL STORAGE HELPER FUNCTIONS
@@ -158,12 +159,15 @@ def firestore_create_user(id_token, email):
         "Content-Type": "application/json",
     }
     
+    # Fix datetime deprecation warning
+    from datetime import datetime, timezone
+    
     # Default user preferences
     payload = {
         "fields": {
             "email": {"stringValue": email},
-            "created_at": {"timestampValue": datetime.datetime.utcnow().isoformat() + "Z"},
-            "last_login": {"timestampValue": datetime.datetime.utcnow().isoformat() + "Z"},
+            "created_at": {"timestampValue": datetime.now(timezone.utc).isoformat()},
+            "last_login": {"timestampValue": datetime.now(timezone.utc).isoformat()},
             "role": {"stringValue": "user"},
             "preferences": {
                 "mapValue": {
@@ -180,28 +184,12 @@ def firestore_create_user(id_token, email):
                         "real_cap_1": {"doubleValue": 68832.42},
                         "real_cap_2": {"doubleValue": 9265.91},
                         "real_cap_3": {"doubleValue": 3930.23},
-                        "last_updated": {"timestampValue": datetime.datetime.utcnow().isoformat() + "Z"}
+                        "last_updated": {"timestampValue": datetime.now(timezone.utc).isoformat()}
                     }
                 }
             }
         }
     }
-    
-    response = requests.patch(url, headers=headers, json=payload)
-    
-    if response.status_code == 200:
-        return response
-    else:
-        # Try POST as fallback
-        try:
-            response = requests.post(
-                f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users?documentId={user_id}",
-                headers=headers,
-                json={"fields": payload["fields"]}
-            )
-            return response
-        except:
-            return None
 
 def save_user_preferences(id_token, user_email, preferences_dict):
     """Save user portfolio preferences to Firestore"""
@@ -225,11 +213,28 @@ def save_user_preferences(id_token, user_email, preferences_dict):
             pref_fields[key] = {"doubleValue": float(value)}
         elif isinstance(value, bool):
             pref_fields[key] = {"booleanValue": value}
-        else:
+        elif key in ["start_date", "risk_on_tickers", "risk_on_weights", 
+                    "risk_off_tickers", "risk_off_weights"]:
+            # These are string fields
             pref_fields[key] = {"stringValue": str(value)}
+        else:
+            # Try to convert string numbers to float
+            try:
+                # Remove % sign and convert to float
+                if isinstance(value, str) and '%' in value:
+                    num_value = float(value.replace('%', '').strip())
+                    pref_fields[key] = {"doubleValue": num_value}
+                else:
+                    # Try to convert to float directly
+                    num_value = float(value)
+                    pref_fields[key] = {"doubleValue": num_value}
+            except (ValueError, TypeError):
+                # If can't convert, store as string
+                pref_fields[key] = {"stringValue": str(value)}
     
-    # Add timestamp
-    pref_fields["last_updated"] = {"timestampValue": datetime.datetime.utcnow().isoformat() + "Z"}
+    # Add timestamp (fix deprecation warning)
+    from datetime import datetime, timezone
+    pref_fields["last_updated"] = {"timestampValue": datetime.now(timezone.utc).isoformat()}
     
     payload = {
         "fields": {
@@ -238,14 +243,15 @@ def save_user_preferences(id_token, user_email, preferences_dict):
                     "fields": pref_fields
                 }
             },
-            "last_login": {"timestampValue": datetime.datetime.utcnow().isoformat() + "Z"}
+            "last_login": {"timestampValue": datetime.now(timezone.utc).isoformat()}
         }
     }
     
     try:
         response = requests.patch(url, headers=headers, json=payload)
         return response.status_code == 200
-    except:
+    except Exception as e:
+        st.error(f"Save error: {str(e)}")
         return False
 
 def load_user_preferences(id_token, user_email):
@@ -277,7 +283,17 @@ def load_user_preferences(id_token, user_email):
                 preferences = {}
                 for key, value_obj in pref_data.items():
                     if "stringValue" in value_obj:
-                        preferences[key] = value_obj["stringValue"]
+                        # Check if it's a numeric string (for backward compatibility)
+                        val = value_obj["stringValue"]
+                        try:
+                            # Try to convert numeric strings to float
+                            if key not in ["start_date", "risk_on_tickers", "risk_on_weights", 
+                                         "risk_off_tickers", "risk_off_weights"]:
+                                preferences[key] = float(val)
+                            else:
+                                preferences[key] = val
+                        except (ValueError, TypeError):
+                            preferences[key] = val
                     elif "doubleValue" in value_obj:
                         preferences[key] = float(value_obj["doubleValue"])
                     elif "booleanValue" in value_obj:
@@ -288,7 +304,8 @@ def load_user_preferences(id_token, user_email):
                 return preferences
         
         return None  # No preferences found
-    except:
+    except Exception as e:
+        st.error(f"Load error: {str(e)}")
         return None
 
 @st.cache_data(ttl=3600, show_spinner=True)  # Cache for 1 hour
@@ -1820,8 +1837,10 @@ def main():
         pd.DataFrame.from_dict(prog_3, orient='index', columns=['Joint']),
     ], axis=1)
 
-    prog_df.loc["Gap (%)"] = prog_df.loc["Gap (%)"].apply(lambda x: f"{x:.2%}")
-    st.dataframe(prog_df)
+    # Create a copy for display with formatted percentages
+    prog_df_display = prog_df.copy()
+    prog_df_display.loc["Gap (%)"] = prog_df.loc["Gap (%)"].apply(lambda x: f"{x:.2%}")
+    st.dataframe(prog_df_display)
 
     def rebalance_text(gap, next_q, days_to_next_q):
         date_str = next_q.strftime("%m/%d/%Y")

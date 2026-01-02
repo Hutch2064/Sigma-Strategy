@@ -4,10 +4,12 @@ import pandas as pd
 import yfinance as yf
 import matplotlib.pyplot as plt
 import streamlit as st
-import datetime
+from datetime import datetime, timezone
 from scipy.optimize import minimize
 import json
 import base64
+import threading
+from functools import wraps
 
 # ============================================================
 # LOCAL STORAGE HELPER FUNCTIONS
@@ -96,6 +98,31 @@ START_SAFE  = 0.4
 FIXED_MA_LENGTH = 200
 FIXED_MA_TYPE = "sma"  # or "ema" - you can choose which one to fix
 
+# Global lock for yfinance calls
+yfinance_lock = threading.Lock()
+
+# ============================================================
+# RATE LIMITING DECORATOR
+# ============================================================
+
+def rate_limited_yfinance(max_per_minute=15):
+    """Decorator to rate limit yfinance calls"""
+    min_interval = 60.0 / max_per_minute
+    last_called = [0.0]
+    lock = threading.Lock()
+    
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            with lock:
+                import time
+                elapsed = time.time() - last_called[0]
+                if elapsed < min_interval:
+                    time.sleep(min_interval - elapsed)
+                last_called[0] = time.time()
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
 
 # ============================================================
 # DATA LOADING
@@ -158,12 +185,15 @@ def firestore_create_user(id_token, email):
         "Content-Type": "application/json",
     }
     
+    # Fix datetime deprecation warning
+    now_utc = datetime.now(timezone.utc)
+    
     # Default user preferences
     payload = {
         "fields": {
             "email": {"stringValue": email},
-            "created_at": {"timestampValue": datetime.datetime.utcnow().isoformat() + "Z"},
-            "last_login": {"timestampValue": datetime.datetime.utcnow().isoformat() + "Z"},
+            "created_at": {"timestampValue": now_utc.isoformat()},
+            "last_login": {"timestampValue": now_utc.isoformat()},
             "role": {"stringValue": "user"},
             "preferences": {
                 "mapValue": {
@@ -180,7 +210,7 @@ def firestore_create_user(id_token, email):
                         "real_cap_1": {"doubleValue": 68832.42},
                         "real_cap_2": {"doubleValue": 9265.91},
                         "real_cap_3": {"doubleValue": 3930.23},
-                        "last_updated": {"timestampValue": datetime.datetime.utcnow().isoformat() + "Z"}
+                        "last_updated": {"timestampValue": now_utc.isoformat()}
                     }
                 }
             }
@@ -221,15 +251,34 @@ def save_user_preferences(id_token, user_email, preferences_dict):
     # Convert preferences to Firestore format
     pref_fields = {}
     for key, value in preferences_dict.items():
-        if isinstance(value, (int, float)):
+        if key in ["start_date", "risk_on_tickers", "risk_on_weights", 
+                  "risk_off_tickers", "risk_off_weights"]:
+            # These are always strings
+            pref_fields[key] = {"stringValue": str(value)}
+        elif isinstance(value, (int, float)):
+            # Remove % signs if present in strings
+            if isinstance(value, str):
+                value = float(str(value).replace('%', '').strip())
             pref_fields[key] = {"doubleValue": float(value)}
         elif isinstance(value, bool):
             pref_fields[key] = {"booleanValue": value}
         else:
-            pref_fields[key] = {"stringValue": str(value)}
+            # Try to convert string numbers
+            try:
+                # Remove any % signs and convert
+                if isinstance(value, str):
+                    clean_value = str(value).replace('%', '').strip()
+                    num_value = float(clean_value)
+                    pref_fields[key] = {"doubleValue": num_value}
+                else:
+                    pref_fields[key] = {"stringValue": str(value)}
+            except (ValueError, TypeError):
+                pref_fields[key] = {"stringValue": str(value)}
     
-    # Add timestamp
-    pref_fields["last_updated"] = {"timestampValue": datetime.datetime.utcnow().isoformat() + "Z"}
+    # Fix datetime deprecation warning
+    now_utc = datetime.now(timezone.utc)
+    
+    pref_fields["last_updated"] = {"timestampValue": now_utc.isoformat()}
     
     payload = {
         "fields": {
@@ -238,14 +287,24 @@ def save_user_preferences(id_token, user_email, preferences_dict):
                     "fields": pref_fields
                 }
             },
-            "last_login": {"timestampValue": datetime.datetime.utcnow().isoformat() + "Z"}
+            "last_login": {"timestampValue": now_utc.isoformat()}
         }
     }
     
     try:
-        response = requests.patch(url, headers=headers, json=payload)
-        return response.status_code == 200
-    except:
+        import time
+        # Add a small delay to avoid rate limiting
+        time.sleep(0.5)
+        
+        response = requests.patch(url, headers=headers, json=payload, timeout=10)
+        
+        if response.status_code == 200:
+            return True
+        else:
+            st.error(f"Firestore error {response.status_code}: {response.text[:200]}")
+            return False
+    except Exception as e:
+        st.error(f"Save error: {str(e)}")
         return False
 
 def load_user_preferences(id_token, user_email):
@@ -277,7 +336,17 @@ def load_user_preferences(id_token, user_email):
                 preferences = {}
                 for key, value_obj in pref_data.items():
                     if "stringValue" in value_obj:
-                        preferences[key] = value_obj["stringValue"]
+                        # Check if it's a numeric string (for backward compatibility)
+                        val = value_obj["stringValue"]
+                        try:
+                            # Try to convert numeric strings to float
+                            if key not in ["start_date", "risk_on_tickers", "risk_on_weights", 
+                                         "risk_off_tickers", "risk_off_weights"]:
+                                preferences[key] = float(val)
+                            else:
+                                preferences[key] = val
+                        except (ValueError, TypeError):
+                            preferences[key] = val
                     elif "doubleValue" in value_obj:
                         preferences[key] = float(value_obj["doubleValue"])
                     elif "booleanValue" in value_obj:
@@ -288,43 +357,72 @@ def load_user_preferences(id_token, user_email):
                 return preferences
         
         return None  # No preferences found
-    except:
+    except Exception as e:
+        st.error(f"Load error: {str(e)}")
         return None
 
+@rate_limited_yfinance(max_per_minute=15)  # 15 calls per minute max
 @st.cache_data(ttl=3600, show_spinner=True)  # Cache for 1 hour
 def load_price_data(tickers, start_date, end_date=None):
+    """Load price data with rate limiting and retry logic"""
     import time
     
-    # Retry logic with exponential backoff
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            # Add increasing delay between attempts
-            if attempt > 0:
-                time.sleep(2 ** attempt)  # 2, 4 seconds on retries
-            
-            data = yf.download(tickers, start=start_date, end=end_date, progress=False)
-            
-            # Prefer Adjusted Close, but fall back to Close if Adj Close is missing
-            if "Adj Close" in data.columns:
-                px = data["Adj Close"].copy()
-                if "Close" in data.columns:
-                    px = px.combine_first(data["Close"])
-            else:
-                px = data["Close"].copy()
+    # Use lock to prevent concurrent calls
+    with yfinance_lock:
+        # Retry logic with exponential backoff
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Add delay between retries
+                if attempt > 0:
+                    time.sleep(3 ** attempt)  # 3, 9 seconds on retries
+                
+                # Single ticker at a time to reduce load
+                if len(tickers) > 1:
+                    # Download all tickers but with single request
+                    data = yf.download(tickers, start=start_date, end=end_date, 
+                                      progress=False, group_by='ticker', threads=False)
+                else:
+                    # Single ticker
+                    data = yf.download(tickers, start=start_date, end=end_date, 
+                                      progress=False, threads=False)
+                
+                # Prefer Adjusted Close, but fall back to Close if Adj Close is missing
+                if "Adj Close" in data.columns:
+                    px = data["Adj Close"].copy()
+                    if "Close" in data.columns:
+                        px = px.combine_first(data["Close"])
+                else:
+                    px = data["Close"].copy()
 
-            if isinstance(px, pd.Series):
-                px = px.to_frame(name=tickers[0])
+                if isinstance(px, pd.Series):
+                    px = px.to_frame(name=tickers[0])
 
-            return px.dropna(how="all")
-            
-        except Exception as e:
-            if attempt == max_retries - 1:  # Last attempt
-                st.error(f"Failed to load data after {max_retries} attempts: {str(e)}")
-                raise
-            else:
-                st.warning(f"Data load attempt {attempt + 1} failed, retrying...")
-                continue
+                return px.dropna(how="all")
+                
+            except Exception as e:
+                if attempt == max_retries - 1:  # Last attempt
+                    st.error(f"Failed to load data after {max_retries} attempts: {str(e)}")
+                    # Try alternative approach for QQQ
+                    if "QQQ" in tickers:
+                        st.warning("Trying alternative QQQ data source...")
+                        try:
+                            # Fallback: Use just Close price
+                            data = yf.download(tickers, start=start_date, end=end_date, 
+                                             progress=False, threads=False)
+                            px = data["Close"].copy()
+                            if isinstance(px, pd.Series):
+                                px = px.to_frame(name=tickers[0])
+                            return px.dropna(how="all")
+                        except:
+                            raise
+                    else:
+                        raise
+                else:
+                    wait_time = 3 ** (attempt + 1)
+                    st.warning(f"Data load attempt {attempt + 1} failed, waiting {wait_time}s before retry...")
+                    time.sleep(wait_time)
+                    continue
 
 
 # ============================================================
@@ -1083,23 +1181,6 @@ def plot_monte_carlo_results(results_dict, strategy_names):
 
 def main():
     # ============================================================
-    # RATE LIMITING PROTECTION
-    # ============================================================
-    import time
-    
-    if 'last_data_request' not in st.session_state:
-        st.session_state.last_data_request = 0
-    
-    # Ensure minimum time between data requests
-    current_time = time.time()
-    time_since_last = current_time - st.session_state.last_data_request
-    
-    if time_since_last < 2.0:  # Minimum 2 seconds between data requests
-        time.sleep(2.0 - time_since_last)
-    
-    st.session_state.last_data_request = time.time()
-    
-    # ============================================================
     # Check if secrets are available
     # ============================================================
     
@@ -1458,35 +1539,40 @@ def main():
     if st.session_state.logged_in:
         st.sidebar.markdown("---")
         if st.sidebar.button("💾 Save Current Settings", type="primary"):
-            # Collect all current settings
-            preferences = {
-                "start_date": start,
-                "risk_on_tickers": risk_on_tickers_str,
-                "risk_on_weights": risk_on_weights_str,
-                "risk_off_tickers": risk_off_tickers_str,
-                "risk_off_weights": risk_off_weights_str,
-                "annual_drag_pct": annual_drag_pct,
-                "qs_cap_1": qs_cap_1,
-                "qs_cap_2": qs_cap_2,
-                "qs_cap_3": qs_cap_3,
-                "real_cap_1": real_cap_1,
-                "real_cap_2": real_cap_2,
-                "real_cap_3": real_cap_3,
-            }
-            
-            # Save to Firestore
-            success = save_user_preferences(
-                st.session_state.id_token,
-                st.session_state.user_email,
-                preferences
-            )
-            
-            if success:
-                st.sidebar.success("✅ Settings saved to your account!")
-                # Update session state
-                st.session_state.saved_preferences = preferences
-            else:
-                st.sidebar.error("❌ Failed to save settings")
+            # Add a loading indicator
+            with st.spinner("Saving settings..."):
+                # Collect all current settings
+                preferences = {
+                    "start_date": start,
+                    "risk_on_tickers": risk_on_tickers_str,
+                    "risk_on_weights": risk_on_weights_str,
+                    "risk_off_tickers": risk_off_tickers_str,
+                    "risk_off_weights": risk_off_weights_str,
+                    "annual_drag_pct": annual_drag_pct,
+                    "qs_cap_1": float(qs_cap_1) if qs_cap_1 else 0.0,
+                    "qs_cap_2": float(qs_cap_2) if qs_cap_2 else 0.0,
+                    "qs_cap_3": float(qs_cap_3) if qs_cap_3 else 0.0,
+                    "real_cap_1": float(real_cap_1) if real_cap_1 else 0.0,
+                    "real_cap_2": float(real_cap_2) if real_cap_2 else 0.0,
+                    "real_cap_3": float(real_cap_3) if real_cap_3 else 0.0,
+                }
+                
+                try:
+                    # Save to Firestore
+                    success = save_user_preferences(
+                        st.session_state.id_token,
+                        st.session_state.user_email,
+                        preferences
+                    )
+                    
+                    if success:
+                        st.sidebar.success("✅ Settings saved to your account!")
+                        # Update session state
+                        st.session_state.saved_preferences = preferences
+                    else:
+                        st.sidebar.error("❌ Failed to save settings. Check console for details.")
+                except Exception as e:
+                    st.sidebar.error(f"❌ Error saving settings: {str(e)}")
     
     run_clicked = st.sidebar.button("Run Backtest")
     if not run_clicked:

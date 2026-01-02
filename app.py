@@ -8,6 +8,15 @@ import datetime
 from scipy.optimize import minimize
 from streamlit_cookies_manager import EncryptedCookieManager
 
+def init_cookies():
+    if "cookies" not in st.session_state:
+        st.session_state.cookies = EncryptedCookieManager(
+            prefix="sigma_auth",
+            password=st.secrets["firebase"]["apiKey"],
+            key="sigma_cookie_manager",
+        )
+    return st.session_state.cookies
+
 # ============================================================
 # CONFIG
 # ============================================================
@@ -855,17 +864,11 @@ def plot_monte_carlo_results(results_dict, strategy_names):
 def main():
     
     st.set_page_config(page_title="Portfolio MA Regime Strategy", layout="wide")
-
+    
     # -------------------------------
     # COOKIE MANAGER (INIT ONCE)
     # -------------------------------
-    if "cookies" not in st.session_state:
-        st.session_state.cookies = EncryptedCookieManager(
-            prefix="sigma_auth",
-            password=st.secrets["firebase"]["apiKey"],
-        )
-
-    cookies = st.session_state.cookies
+    cookies = init_cookies()
 
     if not cookies.ready():
         st.stop()
@@ -958,7 +961,8 @@ def main():
 
     if st.sidebar.button("Logout"):
         cookies.clear()
-        st.session_state.clear()
+        for k in list(st.session_state.keys()):
+            del st.session_state[k]
         st.rerun()
     
     # ============================================================

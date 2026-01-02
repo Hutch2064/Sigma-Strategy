@@ -856,10 +856,16 @@ def main():
     
     st.set_page_config(page_title="Portfolio MA Regime Strategy", layout="wide")
 
-    cookies = EncryptedCookieManager(
-        prefix="sigma_auth",
-        password=st.secrets["firebase"]["apiKey"],
-    )
+    # -------------------------------
+    # COOKIE MANAGER (INIT ONCE)
+    # -------------------------------
+    if "cookies" not in st.session_state:
+        st.session_state.cookies = EncryptedCookieManager(
+            prefix="sigma_auth",
+            password=st.secrets["firebase"]["apiKey"],
+        )
+
+    cookies = st.session_state.cookies
 
     if not cookies.ready():
         st.stop()

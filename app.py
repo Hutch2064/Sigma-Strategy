@@ -67,6 +67,18 @@ def firebase_signup(email, password):
     r = requests.post(url, json=payload)
     return r.json()
 
+def firebase_refresh(refresh_token):
+    api_key = st.secrets["firebase"]["apiKey"]
+    url = f"https://securetoken.googleapis.com/v1/token?key={api_key}"
+
+    payload = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+    }
+
+    r = requests.post(url, data=payload)
+    return r.json()
+
 @st.cache_data(show_spinner=True)
 def load_price_data(tickers, start_date, end_date=None):
     data = yf.download(tickers, start=start_date, end=end_date, progress=False)
@@ -840,9 +852,27 @@ def plot_monte_carlo_results(results_dict, strategy_names):
 # ============================================================
 
 def main():
+    
+    # -------------------------------
+    # AUTO-LOGIN VIA FIREBASE REFRESH
+    # -------------------------------
+    if "logged_in" not in st.session_state:
+        st.session_state.logged_in = False
+
+    if not st.session_state.logged_in:
+        stored_refresh = st.experimental_user.get("refresh_token")
+
+        if stored_refresh:
+            refreshed = firebase_refresh(stored_refresh)
+
+            if "id_token" in refreshed:
+                st.session_state.logged_in = True
+                st.session_state.id_token = refreshed["id_token"]
+                st.session_state.refresh_token = refreshed["refresh_token"]
+                st.session_state.user_email = st.experimental_user.get("email")
 
     # -------------------------------
-    # LOGIN GATE (TEMPORARY / FAKE)
+    # LOGIN GATE
     # -------------------------------
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
@@ -895,13 +925,30 @@ def main():
             else:
                 st.session_state.logged_in = True
                 st.session_state.id_token = resp.get("idToken")
+                st.session_state.refresh_token = resp.get("refreshToken")
                 st.session_state.user_email = resp.get("email")
+
+                # Persist login across refreshes (Streamlit Cloud)
+                st.experimental_user["refresh_token"] = resp.get("refreshToken")
+                st.experimental_user["email"] = resp.get("email")
+
                 st.rerun()
 
         st.stop()
 
     st.set_page_config(page_title="Portfolio MA Regime Strategy", layout="wide")
     st.title("Portfolio Strategy")
+    
+    # -------------------------------
+    # LOGOUT CONTROL (AUTHENTICATED)
+    # -------------------------------
+    st.sidebar.markdown("---")
+    st.sidebar.write(f"Logged in as: **{st.session_state.user_email}**")
+
+    if st.sidebar.button("Logout"):
+        st.session_state.clear()
+        st.experimental_user.clear()
+        st.rerun()
     
     # ============================================================
     # OFFICIAL STRATEGY INCEPTION & LIVE PERFORMANCE SNAPSHOT

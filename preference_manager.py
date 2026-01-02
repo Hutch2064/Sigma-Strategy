@@ -48,4 +48,5 @@ def get_default_preferences():
         "annual_drag_pct": 0.0,
         "qs_cap_1": 10000,
         "real_cap_1": 10000
+        "official_inception_date": "2025-12-22",
     }

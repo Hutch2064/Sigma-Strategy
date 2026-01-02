@@ -175,19 +175,24 @@ def firebase_refresh(refresh_token):
 def firestore_create_user(id_token, user_data):
     """Create or update user document in Firestore"""
     project_id = st.secrets["firebase"]["projectId"]
-    # Get user ID from the decoded token or use localId from signup response
-    user_id = user_data.get("localId")  # This comes from Firebase auth response
+    
+    # Handle different input types
+    if isinstance(user_data, str):
+        # If only email string was passed (old code compatibility)
+        st.warning("Deprecated: Passing email string to firestore_create_user")
+        # Try to extract user ID from token
+        user_id = extract_user_id_from_token(id_token)
+        email = user_data
+        email_verified = False
+    else:
+        # New: user_data is the full Firebase response
+        user_id = user_data.get("localId")
+        email = user_data.get("email", "")
+        email_verified = user_data.get("emailVerified", False)
     
     if not user_id:
-        # Try to decode the token to get UID (you'll need to decode JWT)
-        try:
-            import jwt
-            # Note: Firebase tokens are JWTs, but you need to handle them properly
-            # For simplicity, let's use the localId from the auth response
-            st.warning("No user ID found in response")
-            return None
-        except:
-            return None
+        st.warning("No user ID found")
+        return None
     
     # Create document with user's UID as the document ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
@@ -197,14 +202,13 @@ def firestore_create_user(id_token, user_data):
         "Content-Type": "application/json",
     }
     
-    # Include all user data from Firebase auth response
     payload = {
         "fields": {
-            "email": {"stringValue": user_data.get("email", "")},
+            "email": {"stringValue": email},
             "uid": {"stringValue": user_id},
             "created_at": {"timestampValue": datetime.datetime.utcnow().isoformat() + "Z"},
             "last_login": {"timestampValue": datetime.datetime.utcnow().isoformat() + "Z"},
-            "email_verified": {"booleanValue": user_data.get("emailVerified", False)},
+            "email_verified": {"booleanValue": email_verified},
         }
     }
     
@@ -217,6 +221,18 @@ def firestore_create_user(id_token, user_data):
         st.warning(f"⚠️ Could not save to Firestore: {response.text}")
     
     return response
+
+def extract_user_id_from_token(id_token):
+    """Extract user ID from Firebase ID token (simplified)"""
+    try:
+        # Firebase tokens are JWTs, we can decode the middle part
+        import jwt
+        # Note: This is a simplified version. In production, verify the token properly
+        decoded = jwt.decode(id_token, options={"verify_signature": False})
+        return decoded.get("user_id") or decoded.get("sub")
+    except:
+        # If we can't decode, generate a fallback ID (not ideal but works for now)
+        return None
 
 @st.cache_data(show_spinner=True)
 def load_price_data(tickers, start_date, end_date=None):
@@ -1133,10 +1149,14 @@ def main():
                                     st.session_state.refresh_token = resp.get("refreshToken")
                                     st.session_state.user_email = resp.get("email")
                                     
+                
+
+                                    # With this:
                                     firestore_create_user(
                                         st.session_state.id_token,
-                                        st.session_state.user_email
+                                        resp  # Pass the entire Firebase response
                                     )
+                                    
                                     
                                     
                                     # Save to localStorage if remember me is checked
@@ -1191,7 +1211,7 @@ def main():
                                 
                                     firestore_create_user(
                                         st.session_state.id_token,
-                                        st.session_state.user_email
+                                        resp
                                     )
                             
                                     # Save to localStorage if remember me is checked

@@ -6,6 +6,7 @@ pandas>=2.0.0
 yfinance>=0.2.33
 matplotlib>=3.7.0
 scipy>=1.11.0
+streamlit-cookies-manager
 
 # Authentication extras
 bcrypt>=4.0.1

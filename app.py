@@ -58,18 +58,20 @@ class PortfolioPreferences:
         self.preferences = self.load_preferences()
     
     def _get_default_preferences(self):
-        """Return default preferences for new users"""
-        return {
-            "start_date": "1900-01-01",
-            "risk_on_tickers": "TQQQ",
-            "risk_on_weights": "1.0",
-            "risk_off_tickers": "AGG",
-            "risk_off_weights": "1.0",
-            "annual_drag_pct": 0.0,
-            "qs_cap_1": 10000,
-            "real_cap_1": 10000,
-            "end_date": "",  # Empty for current date
-        }
+    """Return default preferences for new users"""
+    return {
+        "start_date": "1900-01-01",
+        "risk_on_tickers": "TQQQ",
+        "risk_on_weights": "1.0",
+        "risk_off_tickers": "AGG",
+        "risk_off_weights": "1.0",
+        "annual_drag_pct": 0.0,
+        "qs_cap_1": 10000,
+        "real_cap_1": 10000,
+        "end_date": "",  # Empty for current date
+        "official_inception_date": "2025-12-22",  # ← ADD THIS LINE
+    }
+    
     
     def load_preferences(self):
         """Load user preferences from file, or return defaults if file doesn't exist"""
@@ -110,8 +112,6 @@ class PortfolioPreferences:
 # ============================================================
 # CONFIG
 # ============================================================
-
-OFFICIAL_STRATEGY_START_DATE = "2025-12-22"  # Canonical live inception date
 
 DEFAULT_START_DATE = "1900-01-01"
 RISK_FREE_RATE = 0.0
@@ -953,7 +953,7 @@ def main():
     # ============================================================
 
     st.caption(
-        f"**Official Strategy Inception Date:** {OFFICIAL_STRATEGY_START_DATE} "
+        f"**Official Strategy Inception Date:** {official_inception_date} "
         "— performance after this date is documented for actual performance tracking."
     )
 
@@ -965,7 +965,15 @@ def main():
     start = st.sidebar.text_input("Backtest Start Date", user_prefs["start_date"])
     
     # End date with saved preference
-    end = st.sidebar.text_input("Backtest End Date (optional)", user_prefs["end_date"])
+    end = st.sidebar.text_input("End Date (optional)", user_prefs["end_date"])
+
+    # OFFICIAL STRATEGY INCEPTION DATE - ADD THIS SECTION
+    st.sidebar.header("Strategy Inception")
+    official_inception_date = st.sidebar.text_input(
+        "Official Strategy Inception Date", 
+        user_prefs["official_inception_date"],
+        help="The date when you officially started tracking this strategy. Performance after this date is considered 'official'."
+    )
 
     st.sidebar.header("Risk On Capital")
     # Risk On tickers with saved preference
@@ -1048,6 +1056,7 @@ def main():
                 "qs_cap_1": qs_cap_1,
                 "real_cap_1": real_cap_1,
                 "end_date": end,
+                "official_inception_date": official_inception_date,
             }
             
             # Save to user's file
@@ -1257,7 +1266,7 @@ def main():
     # SINCE-INCEPTION SERIES (Sigma vs Buy & Hold vs QQQ)
     # ============================================================
 
-    inception = pd.to_datetime(OFFICIAL_STRATEGY_START_DATE)
+    inception = pd.to_datetime(official_inception_date)
 
     # --- Sigma ---
     sigma_eq_si = hybrid_eq.loc[hybrid_eq.index >= inception]
@@ -1304,7 +1313,7 @@ def main():
     )
 
     ax.set_ylabel("Growth of $1")
-    ax.set_title(f"Performance Since {OFFICIAL_STRATEGY_START_DATE}")
+    ax.set_title(f"Performance Since {official_inception_date}")
     ax.legend()
     ax.grid(alpha=0.3)
 

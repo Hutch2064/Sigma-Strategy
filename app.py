@@ -970,19 +970,27 @@ def main():
     st.sidebar.header("Risk On Capital")
     # Risk On tickers with saved preference
     risk_on_tickers_str = st.sidebar.text_input(
-        "Tickers", user_prefs["risk_on_tickers"]
+        "Tickers", 
+        user_prefs["risk_on_tickers"],
+        key="risk_on_tickers_input"
     )
     risk_on_weights_str = st.sidebar.text_input(
-        "Weights", user_prefs["risk_on_weights"]
+        "Weights", 
+        user_prefs["risk_on_weights"],
+        key="risk_on_weights_input"
     )
 
     st.sidebar.header("Risk Off Capital")
     # Risk Off tickers with saved preference
     risk_off_tickers_str = st.sidebar.text_input(
-        "Tickers", user_prefs["risk_off_tickers"]
+        "Tickers", 
+        user_prefs["risk_off_tickers"],
+        key="risk_off_tickers_input"
     )
     risk_off_weights_str = st.sidebar.text_input(
-        "Weights", user_prefs["risk_off_weights"]
+        "Weights", 
+        user_prefs["risk_off_weights"],
+        key="risk_off_weights_input"
     )
     
     # PORTFOLIO DRAG INPUT with saved preference

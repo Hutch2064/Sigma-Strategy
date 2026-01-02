@@ -2,11 +2,10 @@ credentials:
   usernames:
     admin:
       email: admin@example.com
-      name: Administrator
+      name: Admin User
       password: $2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW
       preferences:
         start_date: "2020-01-01"
-        end_date: ""
         risk_on_tickers: "BITU,QQQU,UGL"
         risk_on_weights: "0.3333,0.3333,0.3333"
         risk_off_tickers: "SHY"
@@ -22,7 +21,7 @@ credentials:
 
 cookie:
   name: portfolio_auth
-  key: portfolio_secret_key_change_this_in_production
+  key: some_secret_key
   expiry_days: 30
 
 preauthorized:

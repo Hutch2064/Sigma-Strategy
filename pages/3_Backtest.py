@@ -11,6 +11,12 @@ st.set_page_config(
     page_title="Backtest",
     layout="wide"
 )
+
+run_clicked = st.sidebar.button("Run Backtest")
+
+if not run_clicked:
+    st.info("Configure inputs in the sidebar, then click **Run Backtest**.")
+    st.stop()
 # ============================================================
 # CONFIG
 # ============================================================

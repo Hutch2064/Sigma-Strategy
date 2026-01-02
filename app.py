@@ -6,6 +6,10 @@ import streamlit as st
 import datetime
 from scipy.optimize import minimize
 
+import streamlit as st
+
+st.write("Firebase project:", st.secrets["firebase"]["projectId"])
+
 # ============================================================
 # CONFIG
 # ============================================================

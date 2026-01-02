@@ -61,9 +61,9 @@ class PortfolioPreferences:
         """Return default preferences for new users"""
         return {
             "start_date": "1900-01-01",
-            "risk_on_tickers": "BITU,QQQU,UGL",
-            "risk_on_weights": "0.3333,0.3333,0.3333",
-            "risk_off_tickers": "SHY",
+            "risk_on_tickers": "TQQQ",
+            "risk_on_weights": "1.0",
+            "risk_off_tickers": "AGG",
             "risk_off_weights": "1.0",
             "annual_drag_pct": 0.0,
             "qs_cap_1": 75815.26,

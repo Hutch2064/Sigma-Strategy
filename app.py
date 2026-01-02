@@ -859,33 +859,44 @@ def main():
         email = st.text_input("Email")
         password = st.text_input("Password", type="password")
 
-        mode = st.radio("Choose action", ["Login", "Create account"])
+        action = st.radio("Choose action", ["Login", "Create account"])
 
-        if st.button(mode):
+        if st.button(action):
             if not email or not password:
                 st.error("Enter email and password.")
-            else:
-                if mode == "Login":
-                    resp = firebase_login(email, password)
-                else:
-                    resp = firebase_signup(email, password)
+                st.stop()
 
-                if "error" in resp:
-                    msg = resp["error"].get("message", "Auth failed.")
-                    pretty = {
-                        "EMAIL_EXISTS": "Account already exists.",
-                        "INVALID_PASSWORD": "Invalid password.",
-                        "EMAIL_NOT_FOUND": "Email not found.",
-                        "WEAK_PASSWORD : Password should be at least 6 characters": "Password too weak (min 6 chars).",
-                        "INVALID_EMAIL": "Invalid email format.",
-                    }.get(msg, msg)
-                    st.error(pretty)
-                else:
-                    st.session_state.logged_in = True
-                    st.session_state.id_token = resp.get("idToken")
-                    st.session_state.user_email = resp.get("email")
-                    st.success("Account ready.")
-                    st.rerun()
+            if action == "Login":
+                resp = firebase_login(email, password)
+
+            else:  # Create account
+                api_key = st.secrets["firebase"]["apiKey"]
+                url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={api_key}"
+
+                payload = {
+                    "email": email,
+                    "password": password,
+                    "returnSecureToken": True
+                }
+
+                r = requests.post(url, json=payload)
+                resp = r.json()
+
+            if "error" in resp:
+                msg = resp["error"].get("message", "Auth failed.")
+                pretty = {
+                    "EMAIL_EXISTS": "Account already exists. Try logging in.",
+                    "INVALID_PASSWORD": "Invalid password.",
+                    "EMAIL_NOT_FOUND": "Email not found.",
+                    "WEAK_PASSWORD : Password should be at least 6 characters":
+                        "Password must be at least 6 characters.",
+                }.get(msg, msg)
+                st.error(pretty)
+            else:
+                st.session_state.logged_in = True
+                st.session_state.id_token = resp.get("idToken")
+                st.session_state.user_email = resp.get("email")
+                st.rerun()
 
         st.stop()
 

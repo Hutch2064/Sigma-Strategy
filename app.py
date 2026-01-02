@@ -8,6 +8,9 @@ from scipy.optimize import minimize
 import yaml
 from yaml.loader import SafeLoader
 import streamlit_authenticator as stauth
+import json
+import os
+from pathlib import Path
 
 # ============================================================
 # AUTHENTICATION SETUP
@@ -38,6 +41,75 @@ def setup_authentication():
 
 # Initialize authentication
 authenticator, config = setup_authentication()
+
+# ============================================================
+# PORTFOLIO PREFERENCES MANAGER
+# ============================================================
+
+class PortfolioPreferences:
+    """Manage user portfolio preferences with file-based storage"""
+    
+    def __init__(self, username):
+        self.username = username
+        self.prefs_dir = Path("user_preferences")
+        self.prefs_dir.mkdir(exist_ok=True)
+        self.prefs_file = self.prefs_dir / f"{username}_preferences.json"
+        self.default_preferences = self._get_default_preferences()
+        self.preferences = self.load_preferences()
+    
+    def _get_default_preferences(self):
+        """Return default preferences for new users"""
+        return {
+            "start_date": "1900-01-01",
+            "risk_on_tickers": "BITU,QQQU,UGL",
+            "risk_on_weights": "0.3333,0.3333,0.3333",
+            "risk_off_tickers": "SHY",
+            "risk_off_weights": "1.0",
+            "annual_drag_pct": 0.0,
+            "qs_cap_1": 75815.26,
+            "qs_cap_2": 10074.83,
+            "qs_cap_3": 4189.76,
+            "real_cap_1": 68832.42,
+            "real_cap_2": 9265.91,
+            "real_cap_3": 3930.23,
+            "end_date": "",  # Empty for current date
+        }
+    
+    def load_preferences(self):
+        """Load user preferences from file, or return defaults if file doesn't exist"""
+        if self.prefs_file.exists():
+            try:
+                with open(self.prefs_file, 'r') as f:
+                    saved_prefs = json.load(f)
+                # Merge with defaults to ensure all keys exist
+                merged_prefs = {**self.default_preferences, **saved_prefs}
+                return merged_prefs
+            except Exception as e:
+                st.warning(f"Could not load saved preferences: {e}")
+                return self.default_preferences.copy()
+        else:
+            return self.default_preferences.copy()
+    
+    def save_preferences(self, prefs_dict):
+        """Save user preferences to file"""
+        try:
+            with open(self.prefs_file, 'w') as f:
+                json.dump(prefs_dict, f, indent=4)
+            self.preferences = prefs_dict.copy()
+            return True
+        except Exception as e:
+            st.error(f"Error saving preferences: {e}")
+            return False
+    
+    def get_all_preferences(self):
+        """Return all current preferences"""
+        return self.preferences.copy()
+    
+    def reset_to_defaults(self):
+        """Reset preferences to defaults"""
+        self.preferences = self.default_preferences.copy()
+        self.save_preferences(self.preferences)
+        return True
 
 # ============================================================
 # CONFIG
@@ -868,6 +940,15 @@ def main():
     # If we get here, user is authenticated!
     st.sidebar.title(f"Welcome {name}!")
     
+    # Initialize portfolio preferences for this user
+    if 'portfolio_prefs' not in st.session_state:
+        st.session_state.portfolio_prefs = PortfolioPreferences(username)
+    
+    portfolio_prefs = st.session_state.portfolio_prefs
+    
+    # Load user preferences
+    user_prefs = portfolio_prefs.get_all_preferences()
+    
     # Logout button
     if st.sidebar.button("Logout"):
         authenticator.logout('Logout', 'main')
@@ -883,38 +964,40 @@ def main():
     )
 
     # ============================================================
-    # SIDEBAR INPUTS
+    # SIDEBAR INPUTS (loaded from user preferences)
     # ============================================================
     
     # Start date with saved preference
-    start = st.sidebar.text_input("Start Date", DEFAULT_START_DATE)
-    end = st.sidebar.text_input("End Date (optional)", "")
+    start = st.sidebar.text_input("Start Date", user_prefs["start_date"])
+    
+    # End date with saved preference
+    end = st.sidebar.text_input("End Date (optional)", user_prefs["end_date"])
 
     st.sidebar.header("Risk On Capital")
     # Risk On tickers with saved preference
     risk_on_tickers_str = st.sidebar.text_input(
-        "Tickers", ",".join(RISK_ON_WEIGHTS.keys())
+        "Tickers", user_prefs["risk_on_tickers"]
     )
     risk_on_weights_str = st.sidebar.text_input(
-        "Weights", ",".join(str(w) for w in RISK_ON_WEIGHTS.values())
+        "Weights", user_prefs["risk_on_weights"]
     )
 
     st.sidebar.header("Risk Off Capital")
     # Risk Off tickers with saved preference
     risk_off_tickers_str = st.sidebar.text_input(
-        "Tickers", ",".join(RISK_OFF_WEIGHTS.keys())
+        "Tickers", user_prefs["risk_off_tickers"]
     )
     risk_off_weights_str = st.sidebar.text_input(
-        "Weights", ",".join(str(w) for w in RISK_OFF_WEIGHTS.values())
+        "Weights", user_prefs["risk_off_weights"]
     )
     
-    # PORTFOLIO DRAG INPUT
+    # PORTFOLIO DRAG INPUT with saved preference
     st.sidebar.header("Portfolio Drag")
     annual_drag_pct = st.sidebar.number_input(
         "Annual Portfolio Drag (%)", 
         min_value=0.0, 
         max_value=20.0, 
-        value=0.0,
+        value=float(user_prefs["annual_drag_pct"]),
         step=0.1,
         format="%.1f",
         help="Annual decay/drag applied to entire portfolio. Use ~4.0% for leveraged ETFs."
@@ -925,15 +1008,33 @@ def main():
     
     st.sidebar.header("Quarterly Portfolio Values")
     # Portfolio values with saved preferences
-    qs_cap_1 = st.sidebar.number_input("Taxable – Portfolio Value at Last Rebalance ($)", min_value=0.0, value=75815.26, step=100.0)
-    qs_cap_2 = st.sidebar.number_input("Tax-Sheltered – Portfolio Value at Last Rebalance ($)", min_value=0.0, value=10074.83, step=100.0)
-    qs_cap_3 = st.sidebar.number_input("Joint – Portfolio Value at Last Rebalance ($)", min_value=0.0, value=4189.76, step=100.0)
+    qs_cap_1 = st.sidebar.number_input("Taxable – Portfolio Value at Last Rebalance ($)", 
+                                       min_value=0.0, 
+                                       value=float(user_prefs["qs_cap_1"]), 
+                                       step=100.0)
+    qs_cap_2 = st.sidebar.number_input("Tax-Sheltered – Portfolio Value at Last Rebalance ($)", 
+                                       min_value=0.0, 
+                                       value=float(user_prefs["qs_cap_2"]), 
+                                       step=100.0)
+    qs_cap_3 = st.sidebar.number_input("Joint – Portfolio Value at Last Rebalance ($)", 
+                                       min_value=0.0, 
+                                       value=float(user_prefs["qs_cap_3"]), 
+                                       step=100.0)
 
     st.sidebar.header("Current Portfolio Values (Today)")
     # Current portfolio values with saved preferences
-    real_cap_1 = st.sidebar.number_input("Taxable – Portfolio Value Today ($)", min_value=0.0, value=68832.42, step=100.0)
-    real_cap_2 = st.sidebar.number_input("Tax-Sheltered – Portfolio Value Today ($)", min_value=0.0, value=9265.91, step=100.0)
-    real_cap_3 = st.sidebar.number_input("Joint – Portfolio Value Today ($)", min_value=0.0, value=3930.23, step=100.0)
+    real_cap_1 = st.sidebar.number_input("Taxable – Portfolio Value Today ($)", 
+                                         min_value=0.0, 
+                                         value=float(user_prefs["real_cap_1"]), 
+                                         step=100.0)
+    real_cap_2 = st.sidebar.number_input("Tax-Sheltered – Portfolio Value Today ($)", 
+                                         min_value=0.0, 
+                                         value=float(user_prefs["real_cap_2"]), 
+                                         step=100.0)
+    real_cap_3 = st.sidebar.number_input("Joint – Portfolio Value Today ($)", 
+                                         min_value=0.0, 
+                                         value=float(user_prefs["real_cap_3"]), 
+                                         step=100.0)
 
     # Add fixed parameters display
     st.sidebar.header("Fixed Parameters")
@@ -942,56 +1043,52 @@ def main():
     st.sidebar.write(f"**Portfolio Drag:** {annual_drag_pct:.1f}% annual")
     
     # ============================================================
-    # SAVE SETTINGS BUTTON (Simple version - saves to session state)
+    # SAVE SETTINGS BUTTON (Saves to user's file)
     # ============================================================
     st.sidebar.markdown("---")
     
-    # Initialize session state for preferences
-    if "user_preferences" not in st.session_state:
-        st.session_state.user_preferences = {}
+    col1, col2 = st.sidebar.columns(2)
     
-    if st.sidebar.button("💾 Save Current Settings", type="primary"):
-        # Collect all current settings
-        preferences = {
-            "start_date": start,
-            "risk_on_tickers": risk_on_tickers_str,
-            "risk_on_weights": risk_on_weights_str,
-            "risk_off_tickers": risk_off_tickers_str,
-            "risk_off_weights": risk_off_weights_str,
-            "annual_drag_pct": annual_drag_pct,
-            "qs_cap_1": qs_cap_1,
-            "qs_cap_2": qs_cap_2,
-            "qs_cap_3": qs_cap_3,
-            "real_cap_1": real_cap_1,
-            "real_cap_2": real_cap_2,
-            "real_cap_3": real_cap_3,
-        }
-        
-        # Save to session state
-        st.session_state.user_preferences = preferences
-        st.sidebar.success("✅ Settings saved for this session!")
+    with col1:
+        if st.button("💾 Save Current Settings", type="primary", use_container_width=True):
+            # Collect all current settings
+            preferences = {
+                "start_date": start,
+                "risk_on_tickers": risk_on_tickers_str,
+                "risk_on_weights": risk_on_weights_str,
+                "risk_off_tickers": risk_off_tickers_str,
+                "risk_off_weights": risk_off_weights_str,
+                "annual_drag_pct": annual_drag_pct,
+                "qs_cap_1": qs_cap_1,
+                "qs_cap_2": qs_cap_2,
+                "qs_cap_3": qs_cap_3,
+                "real_cap_1": real_cap_1,
+                "real_cap_2": real_cap_2,
+                "real_cap_3": real_cap_3,
+                "end_date": end,
+            }
+            
+            # Save to user's file
+            if portfolio_prefs.save_preferences(preferences):
+                st.sidebar.success("✅ Settings saved successfully!")
+                # Update session state
+                st.session_state.portfolio_prefs = portfolio_prefs
+                st.rerun()
+            else:
+                st.sidebar.error("Failed to save settings")
     
-    # Load preferences from session state if available
-    if st.session_state.user_preferences:
-        pref = st.session_state.user_preferences
-        if st.sidebar.button("📥 Load Saved Settings"):
-            # Note: In Streamlit, we can't directly update widgets
-            # So we show the values and let user copy them
-            st.sidebar.info("""
-            **Saved Settings:**
-            - Start Date: {}
-            - Risk On Tickers: {}
-            - Risk Off Tickers: {}
-            - Drag: {:.1f}%
-            """.format(
-                pref.get("start_date", DEFAULT_START_DATE),
-                pref.get("risk_on_tickers", ",".join(RISK_ON_WEIGHTS.keys())),
-                pref.get("risk_off_tickers", ",".join(RISK_OFF_WEIGHTS.keys())),
-                pref.get("annual_drag_pct", 0.0)
-            ))
+    with col2:
+        if st.button("🔄 Reset to Defaults", use_container_width=True):
+            if portfolio_prefs.reset_to_defaults():
+                st.sidebar.info("Settings reset to defaults")
+                st.rerun()
     
-    run_clicked = st.sidebar.button("Run Backtest")
+    # Show current save status
+    st.sidebar.caption(f"Settings saved for: {username}")
+    
+    run_clicked = st.sidebar.button("Run Backtest", type="secondary", use_container_width=True)
     if not run_clicked:
+        st.info("👈 Adjust your settings in the sidebar and click 'Run Backtest' to start")
         st.stop()
 
     risk_on_tickers = [t.strip().upper() for t in risk_on_tickers_str.split(",")]

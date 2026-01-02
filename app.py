@@ -111,6 +111,38 @@ def firebase_login(email, password):
 
     r = requests.post(url, json=payload)
     return r.json()
+
+def firebase_signup(email, password):
+    api_key = st.secrets["firebase"]["apiKey"]
+    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={api_key}"
+
+    payload = {
+        "email": email,
+        "password": password,
+        "returnSecureToken": True
+    }
+
+    try:
+        r = requests.post(url, json=payload)
+        return r.json()
+    except Exception as e:
+        return {"error": {"message": f"Connection error: {str(e)}"}}
+
+def firebase_signup(email, password):
+    api_key = st.secrets["firebase"]["apiKey"]
+    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={api_key}"
+
+    payload = {
+        "email": email,
+        "password": password,
+        "returnSecureToken": True
+    }
+
+    try:
+        r = requests.post(url, json=payload)
+        return r.json()
+    except Exception as e:
+        return {"error": {"message": f"Connection error: {str(e)}"}}
     
 def firebase_signup(email, password):
     api_key = st.secrets["firebase"]["apiKey"]
@@ -140,25 +172,51 @@ def firebase_refresh(refresh_token):
     r = requests.post(url, data=payload)
     return r.json()
     
-def firestore_create_user(id_token, email):
+def firestore_create_user(id_token, user_data):
+    """Create or update user document in Firestore"""
     project_id = st.secrets["firebase"]["projectId"]
-    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users"
-
+    # Get user ID from the decoded token or use localId from signup response
+    user_id = user_data.get("localId")  # This comes from Firebase auth response
+    
+    if not user_id:
+        # Try to decode the token to get UID (you'll need to decode JWT)
+        try:
+            import jwt
+            # Note: Firebase tokens are JWTs, but you need to handle them properly
+            # For simplicity, let's use the localId from the auth response
+            st.warning("No user ID found in response")
+            return None
+        except:
+            return None
+    
+    # Create document with user's UID as the document ID
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+    
     headers = {
         "Authorization": f"Bearer {id_token}",
         "Content-Type": "application/json",
     }
-
+    
+    # Include all user data from Firebase auth response
     payload = {
         "fields": {
-            "email": {"stringValue": email},
-            "role": {"stringValue": "user"},
+            "email": {"stringValue": user_data.get("email", "")},
+            "uid": {"stringValue": user_id},
             "created_at": {"timestampValue": datetime.datetime.utcnow().isoformat() + "Z"},
             "last_login": {"timestampValue": datetime.datetime.utcnow().isoformat() + "Z"},
+            "email_verified": {"booleanValue": user_data.get("emailVerified", False)},
         }
     }
-
-    return requests.post(url, headers=headers, json=payload)
+    
+    # Use PATCH to create or update the document
+    response = requests.patch(url, headers=headers, json=payload)
+    
+    if response.status_code == 200:
+        st.success("✅ User data saved to Firestore")
+    else:
+        st.warning(f"⚠️ Could not save to Firestore: {response.text}")
+    
+    return response
 
 @st.cache_data(show_spinner=True)
 def load_price_data(tickers, start_date, end_date=None):

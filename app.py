@@ -1100,7 +1100,7 @@ def main():
         st.error("No data loaded. Please check your ticker symbols and date range.")
         st.stop()
     
-    st.info(f"Loaded {len(prices)} trading days of data from {prices.index[0].date()} to {prices.index[-1].date()}")
+    st.info(f"Loaded {len(prices)} trading days of data from {prices.index[0].date()} to {prices.index[-1].date()} for backtesting")
     
     # USE FIXED PARAMETERS INSTEAD OF OPTIMIZATION
     best_len  = FIXED_MA_LENGTH

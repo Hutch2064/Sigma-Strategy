@@ -55,6 +55,7 @@ if submitted:
             "qs_cap_1": 10000,
             "real_cap_1": 10000,
             "official_inception_date": "2025-12-22",
+            "benchmark_ticker": "QQQ",
             "last_saved": datetime.datetime.now().isoformat()
         }
         

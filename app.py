@@ -64,6 +64,8 @@ def init_session_state():
         st.session_state.auth_initialized = False
     if "tokens_loaded" not in st.session_state:
         st.session_state.tokens_loaded = False
+    if "saved_preferences" not in st.session_state:  # ADD THIS LINE
+        st.session_state.saved_preferences = None     # ADD THIS LINE
 
 # ============================================================
 # CONFIG
@@ -172,29 +174,14 @@ def firebase_refresh(refresh_token):
     r = requests.post(url, data=payload)
     return r.json()
     
-def firestore_create_user(id_token, user_data):
-    """Create or update user document in Firestore"""
+def firestore_create_user(id_token, email):
+    """Create initial user document with default preferences"""
     project_id = st.secrets["firebase"]["projectId"]
     
-    # Handle different input types
-    if isinstance(user_data, str):
-        # If only email string was passed (old code compatibility)
-        st.warning("Deprecated: Passing email string to firestore_create_user")
-        # Try to extract user ID from token
-        user_id = extract_user_id_from_token(id_token)
-        email = user_data
-        email_verified = False
-    else:
-        # New: user_data is the full Firebase response
-        user_id = user_data.get("localId")
-        email = user_data.get("email", "")
-        email_verified = user_data.get("emailVerified", False)
+    # Create user ID from email
+    import re
+    user_id = re.sub(r'[^a-zA-Z0-9]', '_', email)
     
-    if not user_id:
-        st.warning("No user ID found")
-        return None
-    
-    # Create document with user's UID as the document ID
     url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
     
     headers = {
@@ -202,25 +189,138 @@ def firestore_create_user(id_token, user_data):
         "Content-Type": "application/json",
     }
     
+    # Default user preferences
     payload = {
         "fields": {
             "email": {"stringValue": email},
-            "uid": {"stringValue": user_id},
             "created_at": {"timestampValue": datetime.datetime.utcnow().isoformat() + "Z"},
             "last_login": {"timestampValue": datetime.datetime.utcnow().isoformat() + "Z"},
-            "email_verified": {"booleanValue": email_verified},
+            "role": {"stringValue": "user"},
+            "preferences": {
+                "mapValue": {
+                    "fields": {
+                        "start_date": {"stringValue": DEFAULT_START_DATE},
+                        "risk_on_tickers": {"stringValue": ",".join(RISK_ON_WEIGHTS.keys())},
+                        "risk_on_weights": {"stringValue": ",".join(str(w) for w in RISK_ON_WEIGHTS.values())},
+                        "risk_off_tickers": {"stringValue": ",".join(RISK_OFF_WEIGHTS.keys())},
+                        "risk_off_weights": {"stringValue": ",".join(str(w) for w in RISK_OFF_WEIGHTS.values())},
+                        "annual_drag_pct": {"doubleValue": 0.0},
+                        "qs_cap_1": {"doubleValue": 75815.26},
+                        "qs_cap_2": {"doubleValue": 10074.83},
+                        "qs_cap_3": {"doubleValue": 4189.76},
+                        "real_cap_1": {"doubleValue": 68832.42},
+                        "real_cap_2": {"doubleValue": 9265.91},
+                        "real_cap_3": {"doubleValue": 3930.23},
+                        "last_updated": {"timestampValue": datetime.datetime.utcnow().isoformat() + "Z"}
+                    }
+                }
+            }
         }
     }
     
-    # Use PATCH to create or update the document
     response = requests.patch(url, headers=headers, json=payload)
     
     if response.status_code == 200:
-        st.success("✅ User data saved to Firestore")
+        return response
     else:
-        st.warning(f"⚠️ Could not save to Firestore: {response.text}")
+        # Try POST as fallback
+        try:
+            response = requests.post(
+                f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users?documentId={user_id}",
+                headers=headers,
+                json={"fields": payload["fields"]}
+            )
+            return response
+        except:
+            return None
+
+def save_user_preferences(id_token, user_email, preferences_dict):
+    """Save user portfolio preferences to Firestore"""
+    project_id = st.secrets["firebase"]["projectId"]
     
-    return response
+    # Create user ID from email
+    import re
+    user_id = re.sub(r'[^a-zA-Z0-9]', '_', user_email)
+    
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+    
+    headers = {
+        "Authorization": f"Bearer {id_token}",
+        "Content-Type": "application/json",
+    }
+    
+    # Convert preferences to Firestore format
+    pref_fields = {}
+    for key, value in preferences_dict.items():
+        if isinstance(value, (int, float)):
+            pref_fields[key] = {"doubleValue": float(value)}
+        elif isinstance(value, bool):
+            pref_fields[key] = {"booleanValue": value}
+        else:
+            pref_fields[key] = {"stringValue": str(value)}
+    
+    # Add timestamp
+    pref_fields["last_updated"] = {"timestampValue": datetime.datetime.utcnow().isoformat() + "Z"}
+    
+    payload = {
+        "fields": {
+            "preferences": {
+                "mapValue": {
+                    "fields": pref_fields
+                }
+            },
+            "last_login": {"timestampValue": datetime.datetime.utcnow().isoformat() + "Z"}
+        }
+    }
+    
+    try:
+        response = requests.patch(url, headers=headers, json=payload)
+        return response.status_code == 200
+    except:
+        return False
+
+def load_user_preferences(id_token, user_email):
+    """Load user portfolio preferences from Firestore"""
+    project_id = st.secrets["firebase"]["projectId"]
+    
+    # Create user ID from email
+    import re
+    user_id = re.sub(r'[^a-zA-Z0-9]', '_', user_email)
+    
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users/{user_id}"
+    
+    headers = {
+        "Authorization": f"Bearer {id_token}",
+        "Content-Type": "application/json",
+    }
+    
+    try:
+        response = requests.get(url, headers=headers)
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            # Check if preferences exist
+            if "fields" in data and "preferences" in data["fields"]:
+                pref_data = data["fields"]["preferences"]["mapValue"]["fields"]
+                
+                # Convert Firestore format to Python dict
+                preferences = {}
+                for key, value_obj in pref_data.items():
+                    if "stringValue" in value_obj:
+                        preferences[key] = value_obj["stringValue"]
+                    elif "doubleValue" in value_obj:
+                        preferences[key] = float(value_obj["doubleValue"])
+                    elif "booleanValue" in value_obj:
+                        preferences[key] = value_obj["booleanValue"]
+                    elif "integerValue" in value_obj:
+                        preferences[key] = int(value_obj["integerValue"])
+                
+                return preferences
+        
+        return None  # No preferences found
+    except:
+        return None
 
 def extract_user_id_from_token(id_token):
     """Extract user ID from Firebase ID token (simplified)"""
@@ -1134,30 +1234,30 @@ def main():
                             with st.spinner("Authenticating..."):
                                 resp = firebase_login(login_email, login_password)
                                 
-                                if "error" in resp:
-                                    msg = resp["error"].get("message", "Authentication failed.")
-                                    pretty = {
-                                        "EMAIL_EXISTS": "Account already exists. Try logging in.",
-                                        "INVALID_PASSWORD": "Invalid password.",
-                                        "EMAIL_NOT_FOUND": "Email not found.",
-                                        "INVALID_EMAIL": "Invalid email format.",
-                                    }.get(msg, f"Error: {msg}")
-                                    st.error(pretty)
                                 else:
                                     st.session_state.logged_in = True
                                     st.session_state.id_token = resp.get("idToken")
                                     st.session_state.refresh_token = resp.get("refreshToken")
                                     st.session_state.user_email = resp.get("email")
                                     
-                
-
-                                    # With this:
+                                    # Create or update user in Firestore
                                     firestore_create_user(
                                         st.session_state.id_token,
-                                        resp  # Pass the entire Firebase response
+                                        st.session_state.user_email
                                     )
                                     
+                                    # Load saved preferences
+                                    saved_prefs = load_user_preferences(
+                                        st.session_state.id_token,
+                                        st.session_state.user_email
+                                    )
                                     
+                                    if saved_prefs:
+                                        st.session_state.saved_preferences = saved_prefs
+                                        st.success(f"✅ Welcome back! Loaded your saved portfolio settings.")
+                                    else:
+                                        st.session_state.saved_preferences = None
+                                        st.success(f"✅ Welcome {resp.get('email')}!")
                                     
                                     # Save to localStorage if remember me is checked
                                     if remember_me:
@@ -1170,7 +1270,6 @@ def main():
                                             encode_token(resp.get("email"))
                                         )
                                     
-                                    st.success(f"✅ Welcome {resp.get('email')}!")
                                     st.rerun()
             
             # SIGNUP TAB
@@ -1194,25 +1293,29 @@ def main():
                             with st.spinner("Creating account..."):
                                 resp = firebase_signup(signup_email, signup_password)
                                 
-                                if "error" in resp:
-                                    msg = resp["error"].get("message", "Signup failed.")
-                                    pretty = {
-                                        "EMAIL_EXISTS": "Email already exists. Please login instead.",
-                                        "WEAK_PASSWORD": "Password should be at least 6 characters.",
-                                        "INVALID_EMAIL": "Invalid email format.",
-                                    }.get(msg, f"Error: {msg}")
-                                    st.error(pretty)
                                 else:
                                     # Auto-login after successful signup
                                     st.session_state.logged_in = True
                                     st.session_state.id_token = resp.get("idToken")
                                     st.session_state.refresh_token = resp.get("refreshToken")
                                     st.session_state.user_email = resp.get("email")
-                                
+                                    
+                                    # Create user in Firestore with default preferences
                                     firestore_create_user(
                                         st.session_state.id_token,
-                                        resp
+                                        st.session_state.user_email
                                     )
+                                    
+                                    # Load saved preferences (will be defaults for new user)
+                                    saved_prefs = load_user_preferences(
+                                        st.session_state.id_token,
+                                        st.session_state.user_email
+                                    )
+                                    
+                                    if saved_prefs:
+                                        st.session_state.saved_preferences = saved_prefs
+                                    else:
+                                        st.session_state.saved_preferences = None
                             
                                     # Save to localStorage if remember me is checked
                                     if remember_me_signup:
@@ -1225,7 +1328,7 @@ def main():
                                             encode_token(resp.get("email"))
                                         )
                                     
-                                    st.success("✅ Account created successfully!")
+                                    st.success("✅ Account created successfully! Default settings loaded.")
                                     st.info("Please check your email for verification if required.")
                                     st.rerun()
             

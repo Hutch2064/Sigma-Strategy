@@ -377,46 +377,95 @@ def load_price_data(tickers, start_date, end_date=None):
                 if attempt > 0:
                     time.sleep(3 ** attempt)  # 3, 9 seconds on retries
                 
-                # Single ticker at a time to reduce load
-                if len(tickers) > 1:
-                    # Download all tickers but with single request
-                    data = yf.download(tickers, start=start_date, end=end_date, 
-                                      progress=False, group_by='ticker', threads=False)
-                else:
-                    # Single ticker
-                    data = yf.download(tickers, start=start_date, end=end_date, 
-                                      progress=False, threads=False)
+                # Download data
+                data = yf.download(tickers, start=start_date, end=end_date, 
+                                  progress=False, group_by='ticker', threads=False)
                 
-                # Prefer Adjusted Close, but fall back to Close if Adj Close is missing
-                if "Adj Close" in data.columns:
-                    px = data["Adj Close"].copy()
-                    if "Close" in data.columns:
-                        px = px.combine_first(data["Close"])
+                # Handle different data structures returned by yfinance
+                if len(tickers) == 1:
+                    # Single ticker - simple structure
+                    if "Adj Close" in data.columns:
+                        px = data["Adj Close"].copy()
+                        if "Close" in data.columns:
+                            px = px.combine_first(data["Close"])
+                    else:
+                        px = data["Close"].copy()
+                    
+                    px = px.to_frame(name=tickers[0])
                 else:
-                    px = data["Close"].copy()
+                    # Multiple tickers - MultiIndex structure
+                    # Try to get Adjusted Close first, fall back to Close
+                    px_list = []
+                    for ticker in tickers:
+                        if "Adj Close" in data.columns:
+                            # MultiIndex structure: (Adj Close, ticker)
+                            try:
+                                if ticker in data["Adj Close"].columns:
+                                    ticker_px = data["Adj Close"][ticker].copy()
+                                else:
+                                    # Try Close if Adj Close not available
+                                    ticker_px = data["Close"][ticker].copy()
+                            except:
+                                # Fall back to Close
+                                ticker_px = data["Close"][ticker].copy()
+                        else:
+                            # Only Close available
+                            ticker_px = data["Close"][ticker].copy()
+                        
+                        ticker_px = ticker_px.rename(ticker)
+                        px_list.append(ticker_px)
+                    
+                    # Combine all tickers into a single DataFrame
+                    px = pd.concat(px_list, axis=1)
 
+                # Ensure we have a DataFrame
                 if isinstance(px, pd.Series):
                     px = px.to_frame(name=tickers[0])
 
-                return px.dropna(how="all")
+                # Drop any rows where all values are NaN
+                px = px.dropna(how='all')
+                
+                # If we have no data after dropping NaNs, return empty DataFrame
+                if len(px) == 0:
+                    st.warning(f"No data loaded for tickers: {tickers}")
+                    return pd.DataFrame(columns=tickers)
+                
+                return px
                 
             except Exception as e:
                 if attempt == max_retries - 1:  # Last attempt
                     st.error(f"Failed to load data after {max_retries} attempts: {str(e)}")
-                    # Try alternative approach for QQQ
-                    if "QQQ" in tickers:
-                        st.warning("Trying alternative QQQ data source...")
-                        try:
-                            # Fallback: Use just Close price
-                            data = yf.download(tickers, start=start_date, end=end_date, 
-                                             progress=False, threads=False)
-                            px = data["Close"].copy()
-                            if isinstance(px, pd.Series):
-                                px = px.to_frame(name=tickers[0])
-                            return px.dropna(how="all")
-                        except:
+                    
+                    # Try one more time with simpler approach
+                    st.warning("Trying simpler download approach...")
+                    try:
+                        # Try downloading one ticker at a time
+                        px_list = []
+                        for ticker in tickers:
+                            try:
+                                ticker_data = yf.download(ticker, start=start_date, end=end_date, 
+                                                        progress=False, threads=False)
+                                if len(ticker_data) > 0:
+                                    if "Adj Close" in ticker_data.columns:
+                                        ticker_px = ticker_data["Adj Close"].copy()
+                                    else:
+                                        ticker_px = ticker_data["Close"].copy()
+                                    ticker_px = ticker_px.rename(ticker)
+                                    px_list.append(ticker_px)
+                                    time.sleep(1)  # Delay between ticker downloads
+                            except Exception as ticker_error:
+                                st.warning(f"Could not load {ticker}: {ticker_error}")
+                                continue
+                        
+                        if px_list:
+                            px = pd.concat(px_list, axis=1).dropna(how='all')
+                            if len(px) > 0:
+                                return px
+                            else:
+                                raise ValueError("No data loaded after individual ticker downloads")
+                        else:
                             raise
-                    else:
+                    except:
                         raise
                 else:
                     wait_time = 3 ** (attempt + 1)

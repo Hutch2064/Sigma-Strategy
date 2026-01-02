@@ -1,0 +1,19 @@
+credentials:
+  usernames:
+    admin:
+      email: admin@example.com
+      name: Admin User
+      password: $2b$12$ABC123...  # We'll generate this
+    user1:
+      email: user1@example.com
+      name: Test User
+      password: $2b$12$DEF456...
+
+cookie:
+  name: portfolio_auth
+  key: some_secret_key_123
+  expiry_days: 30
+
+preauthorized:
+  emails:
+    - admin@example.com

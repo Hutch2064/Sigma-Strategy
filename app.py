@@ -13,7 +13,6 @@ def init_cookies():
         st.session_state.cookies = EncryptedCookieManager(
             prefix="sigma_auth",
             password=st.secrets["firebase"]["apiKey"],
-            key="sigma_cookie_manager",
         )
     return st.session_state.cookies
 

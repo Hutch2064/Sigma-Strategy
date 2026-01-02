@@ -888,10 +888,6 @@ def main():
     st.sidebar.write(f"**MA Type:** {FIXED_MA_TYPE.upper()}")
     st.sidebar.write(f"**Portfolio Drag:** {annual_drag_pct:.1f}% annual")
     
-    run_clicked = st.sidebar.button("Run Backtest")
-    if not run_clicked:
-        st.stop()
-
     risk_on_tickers = [t.strip().upper() for t in risk_on_tickers_str.split(",")]
     risk_on_weights_list = [float(x) for x in risk_on_weights_str.split(",")]
     risk_on_weights = dict(zip(risk_on_tickers, risk_on_weights_list))

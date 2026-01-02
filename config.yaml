@@ -3,15 +3,15 @@ credentials:
     admin:
       email: admin@example.com
       name: Admin User
-      password: $2b$12$ABC123...  # We'll generate this
-    user1:
-      email: user1@example.com
-      name: Test User
-      password: $2b$12$DEF456...
+      password: $2b$12$KcY/uFJYGpCmqJYlP/H5ie9dQKdY9b6q3pVQn3sYzLwXhV8mN1oWbC  # admin123
+    user:
+      email: user@example.com
+      name: Regular User
+      password: $2b$12$LpQ/nT9JqYhV5sR8kP/H5ie9dQKdY9b6q3pVQn3sYzLwXhV8mN1oWbD  # password123
 
 cookie:
   name: portfolio_auth
-  key: some_secret_key_123
+  key: some_random_secret_key_123456
   expiry_days: 30
 
 preauthorized:

@@ -139,6 +139,26 @@ def firebase_refresh(refresh_token):
 
     r = requests.post(url, data=payload)
     return r.json()
+    
+def firestore_create_user(id_token, email):
+    project_id = st.secrets["firebase"]["projectId"]
+    url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/users"
+
+    headers = {
+        "Authorization": f"Bearer {id_token}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "fields": {
+            "email": {"stringValue": email},
+            "role": {"stringValue": "user"},
+            "created_at": {"timestampValue": datetime.datetime.utcnow().isoformat() + "Z"},
+            "last_login": {"timestampValue": datetime.datetime.utcnow().isoformat() + "Z"},
+        }
+    }
+
+    return requests.post(url, headers=headers, json=payload)
 
 @st.cache_data(show_spinner=True)
 def load_price_data(tickers, start_date, end_date=None):
@@ -1055,6 +1075,12 @@ def main():
                                     st.session_state.refresh_token = resp.get("refreshToken")
                                     st.session_state.user_email = resp.get("email")
                                     
+                                firestore_create_user(
+                                    st.session_state.id_token,
+                                    st.session_state.user_email
+                                )
+                                    
+                                    
                                     # Save to localStorage if remember me is checked
                                     if remember_me:
                                         save_to_local_storage(
@@ -1104,7 +1130,14 @@ def main():
                                     st.session_state.id_token = resp.get("idToken")
                                     st.session_state.refresh_token = resp.get("refreshToken")
                                     st.session_state.user_email = resp.get("email")
-                                    
+                                
+                                firestore_create_user(
+                                    st.session_state.id_token,
+                                    st.session_state.user_email
+                                )
+                                
+                                
+        
                                     # Save to localStorage if remember me is checked
                                     if remember_me_signup:
                                         save_to_local_storage(

@@ -6,8 +6,6 @@ import streamlit as st
 import datetime
 from scipy.optimize import minimize
 
-st.write("Firebase project:", st.secrets["firebase"]["projectId"])
-
 # ============================================================
 # CONFIG
 # ============================================================
@@ -815,6 +813,24 @@ def plot_monte_carlo_results(results_dict, strategy_names):
 # ============================================================
 
 def main():
+
+    # -------------------------------
+    # LOGIN GATE (TEMPORARY / FAKE)
+    # -------------------------------
+    if "logged_in" not in st.session_state:
+        st.session_state.logged_in = False
+
+    if not st.session_state.logged_in:
+        st.title("Login")
+
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+
+        if st.button("Login"):
+            st.session_state.logged_in = True
+            st.rerun()
+
+        st.stop()
 
     st.set_page_config(page_title="Portfolio MA Regime Strategy", layout="wide")
     st.title("Portfolio Strategy")

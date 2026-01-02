@@ -7,7 +7,7 @@ from yaml.loader import SafeLoader
 
 st.set_page_config(page_title="Create Account")
 
-st.title("📝 Create New Account")
+st.title("Create New Account")
 
 # Load existing config
 try:
@@ -74,7 +74,7 @@ if submitted:
         with open('config.yaml', 'w') as file:
             yaml.dump(config, file, default_flow_style=False)
         
-        st.success("✅ Account created!")
+        st.success("Account created successfully")
         st.info(f"Username: {username}")
         
         if st.button("Go to Login"):

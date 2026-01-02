@@ -861,26 +861,30 @@ def main():
 
         mode = st.radio("Choose action", ["Login", "Create account"])
 
-        if st.button("Login"):
+        if st.button(mode):
             if not email or not password:
                 st.error("Enter email and password.")
             else:
-                resp = firebase_login(email, password)
+                if mode == "Login":
+                    resp = firebase_login(email, password)
+                else:
+                    resp = firebase_signup(email, password)
 
                 if "error" in resp:
-                    msg = resp["error"].get("message", "Login failed.")
+                    msg = resp["error"].get("message", "Auth failed.")
                     pretty = {
+                        "EMAIL_EXISTS": "Account already exists.",
                         "INVALID_PASSWORD": "Invalid password.",
                         "EMAIL_NOT_FOUND": "Email not found.",
-                        "USER_DISABLED": "User account disabled.",
+                        "WEAK_PASSWORD : Password should be at least 6 characters": "Password too weak (min 6 chars).",
                         "INVALID_EMAIL": "Invalid email format.",
-                        "TOO_MANY_ATTEMPTS_TRY_LATER": "Too many attempts — try later.",
                     }.get(msg, msg)
                     st.error(pretty)
                 else:
                     st.session_state.logged_in = True
                     st.session_state.id_token = resp.get("idToken")
                     st.session_state.user_email = resp.get("email")
+                    st.success("Account ready.")
                     st.rerun()
 
         st.stop()

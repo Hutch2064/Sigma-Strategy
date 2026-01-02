@@ -952,11 +952,6 @@ def main():
     # OFFICIAL STRATEGY INCEPTION & LIVE PERFORMANCE SNAPSHOT
     # ============================================================
 
-    st.caption(
-        f"**Official Strategy Inception Date:** {official_inception_date} "
-        "— performance after this date is documented for actual performance tracking."
-    )
-
     # ============================================================
     # SIDEBAR INPUTS (loaded from user preferences)
     # ============================================================
@@ -1035,6 +1030,11 @@ def main():
     st.sidebar.write(f"**MA Length:** {FIXED_MA_LENGTH}")
     st.sidebar.write(f"**MA Type:** {FIXED_MA_TYPE.upper()}")
     st.sidebar.write(f"**Portfolio Drag:** {annual_drag_pct:.1f}% annual")
+    
+    st.caption(
+        f"**Official Strategy Inception Date:** {official_inception_date} "
+        "— performance after this date is documented for actual performance tracking."
+    )
     
     # ============================================================
     # SAVE SETTINGS BUTTON (Saves to user's file)

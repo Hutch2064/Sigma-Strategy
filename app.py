@@ -854,23 +854,30 @@ def plot_monte_carlo_results(results_dict, strategy_names):
 
 def main():
     
+    st.set_page_config(page_title="Portfolio MA Regime Strategy", layout="wide")
+
+    cookies = EncryptedCookieManager(
+        prefix="sigma_auth",
+        password=st.secrets["firebase"]["apiKey"],
+    )
+
+    if not cookies.ready():
+        st.stop()
+    
     # -------------------------------
-    # AUTO-LOGIN VIA FIREBASE REFRESH
+    # AUTO-LOGIN VIA COOKIE
     # -------------------------------
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
 
-    if not st.session_state.logged_in:
-        stored_refresh = st.experimental_user.get("refresh_token")
+    if not st.session_state.logged_in and "refresh_token" in cookies:
+        refreshed = firebase_refresh(cookies["refresh_token"])
 
-        if stored_refresh:
-            refreshed = firebase_refresh(stored_refresh)
-
-            if "id_token" in refreshed:
-                st.session_state.logged_in = True
-                st.session_state.id_token = refreshed["id_token"]
-                st.session_state.refresh_token = refreshed["refresh_token"]
-                st.session_state.user_email = st.experimental_user.get("email")
+        if "id_token" in refreshed:
+            st.session_state.logged_in = True
+            st.session_state.id_token = refreshed["id_token"]
+            st.session_state.refresh_token = refreshed["refresh_token"]
+            st.session_state.user_email = cookies.get("email")
 
     # -------------------------------
     # LOGIN GATE
@@ -929,9 +936,9 @@ def main():
                 st.session_state.refresh_token = resp.get("refreshToken")
                 st.session_state.user_email = resp.get("email")
 
-                # Persist login across refreshes (Streamlit Cloud)
-                st.experimental_user["refresh_token"] = resp.get("refreshToken")
-                st.experimental_user["email"] = resp.get("email")
+                cookies["refresh_token"] = resp.get("refreshToken")
+                cookies["email"] = resp.get("email")
+                cookies.save()
 
                 st.rerun()
 
@@ -955,8 +962,8 @@ def main():
     st.sidebar.write(f"Logged in as: **{st.session_state.user_email}**")
 
     if st.sidebar.button("Logout"):
+        cookies.clear()
         st.session_state.clear()
-        st.experimental_user.clear()
         st.rerun()
     
     # ============================================================

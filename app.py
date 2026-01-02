@@ -835,7 +835,7 @@ def main():
         st.session_state.logged_in = False
     
     if "id_token" not in st.session_state:
-    st.session_state.id_token = None
+        st.session_state.id_token = None
 
     if "user_email" not in st.session_state:
         st.session_state.user_email = None

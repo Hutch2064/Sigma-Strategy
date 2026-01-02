@@ -67,11 +67,7 @@ class PortfolioPreferences:
             "risk_off_weights": "1.0",
             "annual_drag_pct": 0.0,
             "qs_cap_1": 75815.26,
-            "qs_cap_2": 10074.83,
-            "qs_cap_3": 4189.76,
             "real_cap_1": 68832.42,
-            "real_cap_2": 9265.91,
-            "real_cap_3": 3930.23,
             "end_date": "",  # Empty for current date
         }
     
@@ -1007,33 +1003,17 @@ def main():
     # REMOVED OPTIMIZATION SETTINGS
     
     st.sidebar.header("Quarterly Portfolio Values")
-    # Portfolio values with saved preferences
-    qs_cap_1 = st.sidebar.number_input("Taxable – Portfolio Value at Last Rebalance ($)", 
+    # Portfolio values with saved preferences - only ONE portfolio now
+    qs_cap_1 = st.sidebar.number_input("Portfolio Value at Last Rebalance ($)", 
                                        min_value=0.0, 
                                        value=float(user_prefs["qs_cap_1"]), 
                                        step=100.0)
-    qs_cap_2 = st.sidebar.number_input("Tax-Sheltered – Portfolio Value at Last Rebalance ($)", 
-                                       min_value=0.0, 
-                                       value=float(user_prefs["qs_cap_2"]), 
-                                       step=100.0)
-    qs_cap_3 = st.sidebar.number_input("Joint – Portfolio Value at Last Rebalance ($)", 
-                                       min_value=0.0, 
-                                       value=float(user_prefs["qs_cap_3"]), 
-                                       step=100.0)
 
     st.sidebar.header("Current Portfolio Values (Today)")
-    # Current portfolio values with saved preferences
-    real_cap_1 = st.sidebar.number_input("Taxable – Portfolio Value Today ($)", 
+    # Current portfolio values with saved preferences - only ONE portfolio now
+    real_cap_1 = st.sidebar.number_input("Portfolio Value Today ($)", 
                                          min_value=0.0, 
                                          value=float(user_prefs["real_cap_1"]), 
-                                         step=100.0)
-    real_cap_2 = st.sidebar.number_input("Tax-Sheltered – Portfolio Value Today ($)", 
-                                         min_value=0.0, 
-                                         value=float(user_prefs["real_cap_2"]), 
-                                         step=100.0)
-    real_cap_3 = st.sidebar.number_input("Joint – Portfolio Value Today ($)", 
-                                         min_value=0.0, 
-                                         value=float(user_prefs["real_cap_3"]), 
                                          step=100.0)
 
     # Add fixed parameters display
@@ -1060,11 +1040,7 @@ def main():
                 "risk_off_weights": risk_off_weights_str,
                 "annual_drag_pct": annual_drag_pct,
                 "qs_cap_1": qs_cap_1,
-                "qs_cap_2": qs_cap_2,
-                "qs_cap_3": qs_cap_3,
                 "real_cap_1": real_cap_1,
-                "real_cap_2": real_cap_2,
-                "real_cap_3": real_cap_3,
                 "end_date": end,
             }
             
@@ -1398,7 +1374,7 @@ def main():
         st.write("**Quarter start (last SIG rebalance):** None yet")
     st.write(f"**Next Rebalance:** {next_q_end.date()} ({days_to_next_q} days)")
 
-    # Quarter-progress calculations
+    # Quarter-progress calculations - only ONE portfolio now
     def get_sig_progress(qs_cap, today_cap):
         if quarter_start_date is not None and len(hybrid_rw) > 0:
             risky_start = qs_cap * float(hybrid_rw.loc[quarter_start_date])
@@ -1408,16 +1384,10 @@ def main():
             return compute_quarter_progress(0, 0, 0)
 
     prog_1 = get_sig_progress(qs_cap_1, real_cap_1)
-    prog_2 = get_sig_progress(qs_cap_2, real_cap_2)
-    prog_3 = get_sig_progress(qs_cap_3, real_cap_3)
 
     st.write(f"**Quarterly Target Growth Rate:** {quarterly_target:.2%}")
 
-    prog_df = pd.concat([
-        pd.DataFrame.from_dict(prog_1, orient='index', columns=['Taxable']),
-        pd.DataFrame.from_dict(prog_2, orient='index', columns=['Tax-Sheltered']),
-        pd.DataFrame.from_dict(prog_3, orient='index', columns=['Joint']),
-    ], axis=1)
+    prog_df = pd.DataFrame.from_dict(prog_1, orient='index', columns=['Portfolio'])
 
     prog_df.loc["Gap (%)"] = prog_df.loc["Gap (%)"].apply(lambda x: f"{x:.2%}")
     st.dataframe(prog_df)
@@ -1433,9 +1403,7 @@ def main():
             return f"No rebalance needed until **{date_str}** ({days_str})"
 
     st.write("### Rebalance Recommendations")
-    st.write("**Taxable:** "  + rebalance_text(prog_1["Gap ($)"], next_q_end, days_to_next_q))
-    st.write("**Tax-Sheltered:** " + rebalance_text(prog_2["Gap ($)"], next_q_end, days_to_next_q))
-    st.write("**Joint:** " + rebalance_text(prog_3["Gap ($)"], next_q_end, days_to_next_q))
+    st.write("**Portfolio:** " + rebalance_text(prog_1["Gap ($)"], next_q_end, days_to_next_q))
 
     # ENHANCED ADVANCED METRICS
     def time_in_drawdown(dd): return (dd < 0).mean() if len(dd) > 0 else 0
@@ -1589,7 +1557,7 @@ def main():
         out["% Portfolio"] = (out["$"] / total * 100).apply(lambda x: f"{x:.2f}%")
         return out
 
-    st.subheader("Account-Level Allocations")
+    st.subheader("Portfolio Allocations")
 
     hyb_r = float(hybrid_rw.iloc[-1]) if len(hybrid_rw) > 0 else 0
     hyb_s = float(hybrid_sw.iloc[-1]) if len(hybrid_sw) > 0 else 0
@@ -1599,28 +1567,23 @@ def main():
 
     latest_signal = sig.iloc[-1] if len(sig) > 0 else False
 
-    tab1, tab2, tab3 = st.tabs(["Taxable", "Tax-Sheltered", "Joint"])
+    tab1, tab2, tab3 = st.tabs(["Sigma", "SIG", "MA"])
 
-    accounts = [
-        ("Taxable", real_cap_1),
-        ("Tax-Sheltered", real_cap_2),
-        ("Joint", real_cap_3),
-    ]
+    with tab1:
+        st.write(f"### Portfolio — Sigma")
+        st.dataframe(add_pct(compute_allocations(real_cap_1, hyb_r, hyb_s, risk_on_weights, risk_off_weights)))
 
-    for (label, cap), tab in zip(accounts, (tab1, tab2, tab3)):
-        with tab:
-            st.write(f"### {label} — Sigma")
-            st.dataframe(add_pct(compute_allocations(cap, hyb_r, hyb_s, risk_on_weights, risk_off_weights)))
+    with tab2:
+        st.write(f"### Portfolio — SIG")
+        st.dataframe(add_pct(compute_allocations(real_cap_1, pure_r, pure_s, risk_on_weights, risk_off_weights)))
 
-            st.write(f"### {label} — SIG")
-            st.dataframe(add_pct(compute_allocations(cap, pure_r, pure_s, risk_on_weights, risk_off_weights)))
-
-            st.write(f"### {label} — MA")
-            if latest_signal:
-                ma_alloc = compute_allocations(cap, 1.0, 0.0, risk_on_weights, {"SHY": 0})
-            else:
-                ma_alloc = compute_allocations(cap, 0.0, 1.0, {}, risk_off_weights)
-            st.dataframe(add_pct(ma_alloc))
+    with tab3:
+        st.write(f"### Portfolio — MA")
+        if latest_signal:
+            ma_alloc = compute_allocations(real_cap_1, 1.0, 0.0, risk_on_weights, {"SHY": 0})
+        else:
+            ma_alloc = compute_allocations(real_cap_1, 0.0, 1.0, {}, risk_off_weights)
+        st.dataframe(add_pct(ma_alloc))
 
     # MA Distance (unchanged)
     st.subheader("Next MA Signal Distance")
@@ -1732,8 +1695,8 @@ def main():
     
     st.subheader("🎯 Monte Carlo Stress Testing - 12-Month Forward Forecast")
     
-    # Get total current portfolio value from user inputs
-    total_current_portfolio = real_cap_1 + real_cap_2 + real_cap_3
+    # Get total current portfolio value from user inputs - only ONE portfolio now
+    total_current_portfolio = real_cap_1
     
     # Prepare strategy data for Monte Carlo with user's actual portfolio value
     strategies_mc = {
@@ -1953,7 +1916,7 @@ The strategy is designed to:
 
 ---
 
-### **Taxable & Joint Accounts — Sigma Strategy**
+### **Portfolio — Sigma Strategy**
 
 **Regime Filter**
 - A fixed moving average (MA) is applied to the risk-on portfolio index.
@@ -1987,28 +1950,6 @@ The strategy is designed to:
 Leverage Drag Estimation: https://testfol.io/?s=cVJni7zRUsA
 
 ---
-
-### **Roth IRA — (Buy & Hold)**
-
-The Roth IRA is treated as a permanent risk-on vehicle with no MA-based
-de-risking, prioritizing long-term asymmetric growth.
-
-**Overall Roth IRA Allocation**
-- 33.33% QBIG 
-- 33.33% IBIT
-- 33.33% GLD
-
----
-
-### **401K — (Buy & Hold)**
-
-The 401K is treated as a permanent risk-on vehicle with no MA-based
-de-risking, prioritizing long-term asymmetric growth.
-
-**Overall 401K Allocation**
-- 33.33% QBIG 
-- 33.33% IBIT
-- 33.33% GLD
 
 ### **Important Notes**
 - The system is fully rules-based and non-discretionary.

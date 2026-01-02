@@ -7,20 +7,90 @@ import datetime
 from scipy.optimize import minimize
 
 # ============================================================
-# SIMPLE NO-AUTH VERSION - WE'LL ADD AUTH LATER
+# SIMPLE AUTHENTICATION (NO EXTERNAL PACKAGES NEEDED)
 # ============================================================
 
-st.set_page_config(page_title="SigmaTrader", layout="wide")
+# Hardcoded users for demo
+DEMO_USERS = {
+    "demo@example.com": {
+        "password": "demo123",
+        "full_name": "Demo User",
+        "plan": "free"
+    },
+    "admin@example.com": {
+        "password": "admin123",
+        "full_name": "Admin User",
+        "plan": "premium"
+    }
+}
 
-# Add a header explaining this is a demo
-st.title("📈 SigmaTrader - Portfolio Strategy")
-st.markdown("""
-<div style='background-color: #f0f2f6; padding: 20px; border-radius: 10px; margin-bottom: 20px;'>
-<h3>🚀 Welcome to SigmaTrader!</h3>
-<p>This is a <strong>demo version</strong> without authentication.</p>
-<p><em>Authentication and user accounts coming soon!</em></p>
-</div>
-""", unsafe_allow_html=True)
+# Initialize session state
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+if 'user' not in st.session_state:
+    st.session_state.user = None
+
+# Check if user is authenticated
+if not st.session_state.authenticated:
+    st.set_page_config(page_title="SigmaTrader - Login", layout="centered")
+    
+    st.title("🔐 SigmaTrader Login")
+    
+    tab1, tab2 = st.tabs(["Login", "Demo Info"])
+    
+    with tab1:
+        with st.form("login_form"):
+            email = st.text_input("Email", value="demo@example.com").lower().strip()
+            password = st.text_input("Password", type="password", value="demo123")
+            
+            login_btn = st.form_submit_button("Login")
+            
+            if login_btn:
+                if email in DEMO_USERS and DEMO_USERS[email]["password"] == password:
+                    st.session_state.authenticated = True
+                    st.session_state.user = DEMO_USERS[email]
+                    st.session_state.user['email'] = email
+                    st.success(f"Welcome back, {DEMO_USERS[email]['full_name']}!")
+                    st.rerun()
+                else:
+                    st.error("Invalid email or password")
+    
+    with tab2:
+        st.info("### Demo Credentials")
+        st.code("Email: demo@example.com\nPassword: demo123")
+        st.markdown("---")
+        st.info("### About SigmaTrader")
+        st.markdown("""
+        - Portfolio strategy backtesting
+        - MA regime switching
+        - Quarterly rebalancing
+        - Performance analytics
+        """)
+    
+    st.stop()
+
+# ============================================================
+# MAIN APP - USER IS AUTHENTICATED
+# ============================================================
+
+# Set page config for main app
+st.set_page_config(page_title="SigmaTrader Pro", layout="wide")
+
+# User info in sidebar
+st.sidebar.markdown(f"### 👤 {st.session_state.user['full_name']}")
+st.sidebar.markdown(f"📧 {st.session_state.user['email']}")
+st.sidebar.markdown(f"📋 Plan: **{st.session_state.user['plan'].upper()}**")
+
+if st.sidebar.button("🚪 Logout"):
+    st.session_state.authenticated = False
+    st.session_state.user = None
+    st.rerun()
+
+st.sidebar.markdown("---")
+
+# ============================================================
+# YOUR APP STARTS HERE
+# ============================================================
 
 # ============================================================
 # CONFIG

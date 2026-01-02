@@ -1371,7 +1371,6 @@ def main():
         columns=["Metric", "Sigma", "Buy & Hold", benchmark_ticker]
     )
 
-    st.subheader("📊 Since-Inception Performance Metrics")
     st.dataframe(si_table, use_container_width=True)
     
     # IMPORTANT: `perf` always means Sigma performance

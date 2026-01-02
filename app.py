@@ -1036,7 +1036,7 @@ def main():
     col1, col2 = st.sidebar.columns(2)
     
     with col1:
-        if st.button("💾 Save Current Settings", type="primary", use_container_width=True):
+        if st.button("Save Configuration", type="primary", use_container_width=True):
             # Collect all current settings
             preferences = {
                 "start_date": start,
@@ -1060,7 +1060,7 @@ def main():
                 st.sidebar.error("Failed to save settings")
     
     with col2:
-        if st.button("🔄 Reset to Defaults", use_container_width=True):
+        if st.button("Reset to Default Configuration", use_container_width=True):
             if portfolio_prefs.reset_to_defaults():
                 st.sidebar.info("Settings reset to defaults")
                 st.rerun()
@@ -1068,9 +1068,9 @@ def main():
     # Show current save status
     st.sidebar.caption(f"Settings saved for: {username}")
     
-    run_clicked = st.sidebar.button("Run Backtest", type="secondary", use_container_width=True)
+    run_clicked = st.sidebar.button("Run", type="secondary", use_container_width=True)
     if not run_clicked:
-        st.info("👈 Adjust your settings in the sidebar and click 'Run Backtest' to start")
+        st.info("Adjust your configuration in the sidebar and click 'Run'")
         st.stop()
 
     risk_on_tickers = [t.strip().upper() for t in risk_on_tickers_str.split(",")]

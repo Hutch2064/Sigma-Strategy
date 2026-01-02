@@ -43,7 +43,7 @@ if submitted:
         # Hash password
         hashed_password = stauth.Hasher([password]).generate()[0]
         
-        # DEFAULT portfolio settings (simple defaults)
+        # DEFAULT portfolio settings (simple defaults) - UPDATED for single portfolio
         default_preferences = {
             "start_date": "2020-01-01",
             "end_date": "",
@@ -53,11 +53,7 @@ if submitted:
             "risk_off_weights": "1.0",
             "annual_drag_pct": 0.0,
             "qs_cap_1": 75815.26,
-            "qs_cap_2": 10074.83,
-            "qs_cap_3": 4189.76,
             "real_cap_1": 68832.42,
-            "real_cap_2": 9265.91,
-            "real_cap_3": 3930.23,
             "last_saved": datetime.datetime.now().isoformat()
         }
         

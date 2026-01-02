@@ -1299,7 +1299,7 @@ def main():
     # SINCE-INCEPTION EQUITY CURVE
     # ============================================================
 
-    st.subheader("Your Performance (Sigma vs Buy & Hold vs {benchmark_ticker})")
+    st.subheader(f"Your Performance (Sigma vs Buy & Hold vs {benchmark_ticker})")
 
     fig, ax = plt.subplots(figsize=(12, 6))
 

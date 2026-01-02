@@ -6,27 +6,23 @@ import matplotlib.pyplot as plt
 import streamlit as st
 import datetime
 from scipy.optimize import minimize
-from streamlit_cookies_manager import EncryptedCookieManager
 
-def init_cookies():
-    # Initialize cookies only once
-    if "cookies" not in st.session_state:
-        st.session_state.cookies = EncryptedCookieManager(
-            prefix="sigma_auth",
-            password=st.secrets["firebase"]["apiKey"],
-        )
-    
-    # Initialize the cookies
-    if not hasattr(st.session_state.cookies, 'ready'):
-        return None
-    
-    if not st.session_state.cookies.ready():
-        try:
-            st.session_state.cookies.load()
-        except:
-            pass
-    
-    return st.session_state.cookies
+# ============================================================
+# SIMPLE SESSION-BASED AUTHENTICATION
+# ============================================================
+
+def init_session_state():
+    """Initialize all session state variables"""
+    if "logged_in" not in st.session_state:
+        st.session_state.logged_in = False
+    if "id_token" not in st.session_state:
+        st.session_state.id_token = None
+    if "user_email" not in st.session_state:
+        st.session_state.user_email = None
+    if "refresh_token" not in st.session_state:
+        st.session_state.refresh_token = None
+    if "auth_attempted" not in st.session_state:
+        st.session_state.auth_attempted = False
 
 # ============================================================
 # CONFIG
@@ -876,7 +872,6 @@ def plot_monte_carlo_results(results_dict, strategy_names):
 # ============================================================
 
 def main():
-
     # Check if secrets are available
     if "firebase" not in st.secrets:
         st.error("Firebase configuration not found in secrets. Please check your secrets.toml file.")
@@ -889,129 +884,125 @@ def main():
     st.set_page_config(page_title="Portfolio MA Regime Strategy", layout="wide")
     
     # -------------------------------
-    # COOKIE MANAGER (INIT ONCE)
-    # -------------------------------
-    try:
-        cookies = init_cookies()
-        if cookies is None:
-            st.error("Failed to initialize cookies manager.")
-            st.stop()
-    except Exception as e:
-        st.error(f"Cookie initialization error: {str(e)}")
-        st.stop()
-    
-    # -------------------------------
     # SESSION STATE INITIALIZATION
     # -------------------------------
-    if "logged_in" not in st.session_state:
-        st.session_state.logged_in = False
-    if "id_token" not in st.session_state:
-        st.session_state.id_token = None
-    if "user_email" not in st.session_state:
-        st.session_state.user_email = None
-    if "refresh_token" not in st.session_state:
-        st.session_state.refresh_token = None
+    init_session_state()
     
     # -------------------------------
-    # AUTO-LOGIN VIA COOKIE
+    # AUTO-LOGIN VIA SESSION
     # -------------------------------
-    if not st.session_state.logged_in:
+    if not st.session_state.logged_in and st.session_state.refresh_token:
         try:
-            # Check for refresh token in cookies
-            refresh_token = cookies.get("refresh_token")
-            if refresh_token:
-                refreshed = firebase_refresh(refresh_token)
+            with st.spinner("Restoring your session..."):
+                refreshed = firebase_refresh(st.session_state.refresh_token)
+                
                 if "id_token" in refreshed:
                     st.session_state.logged_in = True
                     st.session_state.id_token = refreshed["id_token"]
                     st.session_state.refresh_token = refreshed["refresh_token"]
-                    st.session_state.user_email = cookies.get("email", "Unknown")
-                    
-                    # Update cookies
-                    cookies["refresh_token"] = refreshed["refresh_token"]
-                    cookies.save()
                     st.rerun()
+                else:
+                    # Refresh failed, clear tokens
+                    st.session_state.refresh_token = None
         except Exception as e:
-            # Silently fail auto-login - user will manually login
-            pass
+            # Silently fail auto-login
+            st.session_state.refresh_token = None
     
     # -------------------------------
     # LOGIN GATE
     # -------------------------------
     if not st.session_state.logged_in:
-        st.title("Login to Portfolio Strategy Dashboard")
+        # Center the login form
+        col1, col2, col3 = st.columns([1, 2, 1])
         
-        # Create tabs for Login and Signup
-        tab1, tab2 = st.tabs(["Login", "Create Account"])
-        
-        # LOGIN TAB
-        with tab1:
-            with st.form("login_form"):
-                login_email = st.text_input("Email", key="login_email")
-                login_password = st.text_input("Password", type="password", key="login_password")
-                login_submitted = st.form_submit_button("Login")
-                
-                if login_submitted:
-                    if not login_email or not login_password:
-                        st.error("Please enter both email and password.")
-                    else:
-                        with st.spinner("Logging in..."):
-                            resp = firebase_login(login_email, login_password)
-                            
-                            if "error" in resp:
-                                msg = resp["error"].get("message", "Authentication failed.")
-                                pretty = {
-                                    "EMAIL_EXISTS": "Account already exists. Try logging in.",
-                                    "INVALID_PASSWORD": "Invalid password.",
-                                    "EMAIL_NOT_FOUND": "Email not found.",
-                                    "INVALID_EMAIL": "Invalid email format.",
-                                }.get(msg, f"Error: {msg}")
-                                st.error(pretty)
-                            else:
-                                st.session_state.logged_in = True
-                                st.session_state.id_token = resp.get("idToken")
-                                st.session_state.refresh_token = resp.get("refreshToken")
-                                st.session_state.user_email = resp.get("email")
+        with col2:
+            st.title("🔐 Portfolio Strategy Login")
+            
+            # Create tabs for Login and Signup
+            tab1, tab2 = st.tabs(["Login", "Create Account"])
+            
+            # LOGIN TAB
+            with tab1:
+                with st.form("login_form"):
+                    st.subheader("Login to Your Account")
+                    login_email = st.text_input("Email", key="login_email")
+                    login_password = st.text_input("Password", type="password", key="login_password")
+                    login_submitted = st.form_submit_button("Login", type="primary", use_container_width=True)
+                    
+                    if login_submitted:
+                        st.session_state.auth_attempted = True
+                        if not login_email or not login_password:
+                            st.error("Please enter both email and password.")
+                        else:
+                            with st.spinner("Authenticating..."):
+                                resp = firebase_login(login_email, login_password)
                                 
-                                # Save to cookies
-                                cookies["refresh_token"] = resp.get("refreshToken")
-                                cookies["email"] = resp.get("email")
-                                cookies.save()
+                                if "error" in resp:
+                                    msg = resp["error"].get("message", "Authentication failed.")
+                                    pretty = {
+                                        "EMAIL_EXISTS": "Account already exists. Try logging in.",
+                                        "INVALID_PASSWORD": "Invalid password.",
+                                        "EMAIL_NOT_FOUND": "Email not found.",
+                                        "INVALID_EMAIL": "Invalid email format.",
+                                    }.get(msg, f"Error: {msg}")
+                                    st.error(pretty)
+                                else:
+                                    st.session_state.logged_in = True
+                                    st.session_state.id_token = resp.get("idToken")
+                                    st.session_state.refresh_token = resp.get("refreshToken")
+                                    st.session_state.user_email = resp.get("email")
+                                    
+                                    st.success(f"✅ Welcome {resp.get('email')}!")
+                                    st.rerun()
+            
+            # SIGNUP TAB
+            with tab2:
+                with st.form("signup_form"):
+                    st.subheader("Create New Account")
+                    signup_email = st.text_input("Email", key="signup_email")
+                    signup_password = st.text_input("Password", type="password", key="signup_password")
+                    confirm_password = st.text_input("Confirm Password", type="password", key="confirm_password")
+                    signup_submitted = st.form_submit_button("Create Account", type="primary", use_container_width=True)
+                    
+                    if signup_submitted:
+                        st.session_state.auth_attempted = True
+                        if not signup_email or not signup_password or not confirm_password:
+                            st.error("Please fill in all fields.")
+                        elif signup_password != confirm_password:
+                            st.error("Passwords do not match.")
+                        elif len(signup_password) < 6:
+                            st.error("Password must be at least 6 characters.")
+                        else:
+                            with st.spinner("Creating account..."):
+                                resp = firebase_signup(signup_email, signup_password)
                                 
-                                st.success(f"Welcome {resp.get('email')}!")
-                                st.rerun()
-        
-        # SIGNUP TAB
-        with tab2:
-            with st.form("signup_form"):
-                signup_email = st.text_input("Email", key="signup_email")
-                signup_password = st.text_input("Password", type="password", key="signup_password")
-                confirm_password = st.text_input("Confirm Password", type="password", key="confirm_password")
-                signup_submitted = st.form_submit_button("Create Account")
-                
-                if signup_submitted:
-                    if not signup_email or not signup_password or not confirm_password:
-                        st.error("Please fill in all fields.")
-                    elif signup_password != confirm_password:
-                        st.error("Passwords do not match.")
-                    elif len(signup_password) < 6:
-                        st.error("Password must be at least 6 characters.")
-                    else:
-                        with st.spinner("Creating account..."):
-                            resp = firebase_signup(signup_email, signup_password)
-                            
-                            if "error" in resp:
-                                msg = resp["error"].get("message", "Signup failed.")
-                                pretty = {
-                                    "EMAIL_EXISTS": "Email already exists. Please login instead.",
-                                    "WEAK_PASSWORD": "Password should be at least 6 characters.",
-                                    "INVALID_EMAIL": "Invalid email format.",
-                                }.get(msg, f"Error: {msg}")
-                                st.error(pretty)
-                            else:
-                                st.success("Account created successfully! Please login with your new credentials.")
-                                # Switch to login tab
-                                st.rerun()
+                                if "error" in resp:
+                                    msg = resp["error"].get("message", "Signup failed.")
+                                    pretty = {
+                                        "EMAIL_EXISTS": "Email already exists. Please login instead.",
+                                        "WEAK_PASSWORD": "Password should be at least 6 characters.",
+                                        "INVALID_EMAIL": "Invalid email format.",
+                                    }.get(msg, f"Error: {msg}")
+                                    st.error(pretty)
+                                else:
+                                    # Auto-login after successful signup
+                                    st.session_state.logged_in = True
+                                    st.session_state.id_token = resp.get("idToken")
+                                    st.session_state.refresh_token = resp.get("refreshToken")
+                                    st.session_state.user_email = resp.get("email")
+                                    
+                                    st.success("✅ Account created successfully!")
+                                    st.info("Please check your email for verification if required.")
+                                    st.rerun()
+            
+            # Add some helpful info
+            st.markdown("---")
+            st.info("""
+            **Note:** 
+            - You need a valid email and password to access the strategy dashboard
+            - Accounts are managed via Firebase Authentication
+            - Your session will be maintained until you logout
+            """)
         
         st.stop()  # Stop execution if not logged in
     
@@ -1019,20 +1010,17 @@ def main():
     # LOGOUT CONTROL (AUTHENTICATED)
     # -------------------------------
     st.sidebar.markdown("---")
-    st.sidebar.write(f"Logged in as: **{st.session_state.user_email}**")
+    st.sidebar.write(f"👤 Logged in as: **{st.session_state.user_email}**")
     
-    if st.sidebar.button("Logout", type="primary"):
-        # Clear cookies
-        try:
-            cookies.clear()
-            cookies.save()
-        except:
-            pass
-        
+    if st.sidebar.button("🚪 Logout", type="secondary"):
         # Clear session state
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
+        st.session_state.logged_in = False
+        st.session_state.id_token = None
+        st.session_state.user_email = None
+        st.session_state.refresh_token = None
+        st.session_state.auth_attempted = False
         
+        st.success("Logged out successfully!")
         st.rerun()
     
     # ============================================================

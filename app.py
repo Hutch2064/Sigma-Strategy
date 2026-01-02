@@ -117,13 +117,11 @@ DEFAULT_START_DATE = "1900-01-01"
 RISK_FREE_RATE = 0.0
 
 RISK_ON_WEIGHTS = {
-    "BITU": .3333,
-    "QQQU": .3333,
-    "UGL":.3333,
+    "TQQQ": 1.0,
 }
 
 RISK_OFF_WEIGHTS = {
-    "SHY": 1.0,
+    "AGG": 1.0,
 }
 
 FLIP_COST = 0.0005

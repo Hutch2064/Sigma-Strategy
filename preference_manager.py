@@ -41,9 +41,9 @@ def get_default_preferences():
     return {
         "start_date": "2020-01-01",
         "end_date": "",
-        "risk_on_tickers": "BITU,QQQU,UGL",
-        "risk_on_weights": "0.3333,0.3333,0.3333",
-        "risk_off_tickers": "SHY",
+        "risk_on_tickers": "TQQQ",
+        "risk_on_weights": "1.0",
+        "risk_off_tickers": "AGG",
         "risk_off_weights": "1.0",
         "annual_drag_pct": 0.0,
         "qs_cap_1": 75815.26,

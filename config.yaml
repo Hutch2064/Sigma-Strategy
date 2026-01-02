@@ -6,13 +6,13 @@ credentials:
       password: $2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW
       preferences:  # ← ADD THIS SECTION
         start_date: "2020-01-01"
-        risk_on_tickers: "BITU,QQQU,UGL"
-        risk_on_weights: "0.3333,0.3333,0.3333"
+        risk_on_tickers: "TQQQ"
+        risk_on_weights: "1.0"
         risk_off_tickers: "SHY"
         risk_off_weights: "1.0"
         annual_drag_pct: 0.0
-        qs_cap_1: 75815.26
-        real_cap_1: 68832.42
+        qs_cap_1: 10000
+        real_cap_1: 10000
         last_saved: "2024-01-01T00:00:00"
 
 cookie:

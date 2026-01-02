@@ -1384,8 +1384,8 @@ def main():
         st.subheader("Sigma – Actual Rebalance Dates (Historical)")
         st.dataframe(reb_df)
     else:
-        st.subheader("Sigma/MA – Historical Rebalance Dates")
-        st.write("No Sigma/MA rebalances occurred during the backtest.")
+        st.subheader("Sigma – Historical Rebalance Dates")
+        st.write("No Sigma rebalances occurred during the backtest.")
 
     # Quarter start should follow the last actual SIG rebalance
     if len(hybrid_rebals) > 0:
@@ -1506,7 +1506,7 @@ def main():
     )
 
     # ENHANCED STAT TABLE WITH NEW METRICS
-    st.subheader("MA vs Buy & Hold vs Sigma/MA vs SIG")
+    st.subheader("MA vs Buy & Hold vs Sigma vs SIG")
     rows = [
         ("CAGR", "CAGR"),
         ("Volatility", "Volatility"),
@@ -1777,7 +1777,7 @@ def main():
         st.pyplot(mc_fig)
         
         # Display terminal value projections
-        st.subheader("📊 12-Month Portfolio Value Projections")
+        st.subheader(" Next 12-Month Portfolio Value Projections")
         
         terminal_value_data = []
         for name, results in mc_results.items():
@@ -1798,7 +1798,7 @@ def main():
             st.dataframe(terminal_value_df, use_container_width=True)
         
         # Display return projections
-        st.subheader("📈 12-Month Return Projections (%)")
+        st.subheader("Next 12-Month Return Projections (%)")
         
         return_data = []
         for name, results in mc_results.items():
@@ -1820,7 +1820,7 @@ def main():
             st.dataframe(return_df, use_container_width=True)
             
             # Key insights
-            st.subheader("🔍 Key Insights from Monte Carlo")
+            st.subheader("Key Insights from Monte Carlo")
             
             col1, col2, col3 = st.columns(3)
             
@@ -1887,24 +1887,6 @@ def main():
                         "Average in Worst 1% (CVaR 99%)": "{:.2%}"
                     }), use_container_width=True)
                     
-                    # Compact summary table
-                    st.subheader("📈 Quick Comparison - 12-Month Outlook")
-                    
-                    summary_data = []
-                    for name, results in valid_results:
-                        summary_data.append({
-                            "Strategy": name,
-                            "Expected": f"{results['expected_return']:.1%}",
-                            "P5 (Bad)": f"{np.percentile(results['terminal_returns'], 5):.1%}",
-                            "P95 (Good)": f"{np.percentile(results['terminal_returns'], 95):.1%}",
-                            "CVaR 95%": f"{results['cvar_95']:.1%}",
-                            "Prob > 0": f"{results['prob_positive']:.0%}",
-                            "Volatility": f"{results['expected_vol']:.1%}"
-                        })
-                    
-                    if summary_data:
-                        summary_df = pd.DataFrame(summary_data)
-                        st.dataframe(summary_df, use_container_width=True)
                         
                         # Monte Carlo assumptions disclaimer
                         st.info("""

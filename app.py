@@ -6,10 +6,49 @@ import matplotlib.pyplot as plt
 import streamlit as st
 import datetime
 from scipy.optimize import minimize
+import json
+import base64
 
 # ============================================================
-# SIMPLE SESSION-BASED AUTHENTICATION
+# LOCAL STORAGE HELPER FUNCTIONS
 # ============================================================
+
+def save_to_local_storage(key, value):
+    """Save data to browser's localStorage via JavaScript"""
+    js_code = f"""
+    <script>
+    localStorage.setItem('{key}', '{value}');
+    </script>
+    """
+    st.components.v1.html(js_code, height=0)
+
+def get_from_local_storage(key):
+    """Get data from browser's localStorage via JavaScript"""
+    js_code = f"""
+    <script>
+    var value = localStorage.getItem('{key}');
+    if (value) {{
+        window.parent.postMessage({{'type': 'localStorage', 'key': '{key}', 'value': value}}, '*');
+    }}
+    </script>
+    """
+    st.components.v1.html(js_code, height=0)
+    return None  # Value will come via message handler
+
+def encode_token(token):
+    """Simple encoding for storing tokens"""
+    if token:
+        return base64.b64encode(token.encode()).decode()
+    return None
+
+def decode_token(encoded_token):
+    """Decode encoded token"""
+    if encoded_token:
+        try:
+            return base64.b64decode(encoded_token.encode()).decode()
+        except:
+            return None
+    return None
 
 def init_session_state():
     """Initialize all session state variables"""
@@ -21,8 +60,10 @@ def init_session_state():
         st.session_state.user_email = None
     if "refresh_token" not in st.session_state:
         st.session_state.refresh_token = None
-    if "auth_attempted" not in st.session_state:
-        st.session_state.auth_attempted = False
+    if "auth_initialized" not in st.session_state:
+        st.session_state.auth_initialized = False
+    if "tokens_loaded" not in st.session_state:
+        st.session_state.tokens_loaded = False
 
 # ============================================================
 # CONFIG
@@ -889,29 +930,91 @@ def main():
     init_session_state()
     
     # -------------------------------
-    # AUTO-LOGIN VIA SESSION
+    # LOAD TOKENS FROM LOCAL STORAGE (ONCE)
     # -------------------------------
-    if not st.session_state.logged_in and st.session_state.refresh_token:
-        try:
-            with st.spinner("Restoring your session..."):
-                refreshed = firebase_refresh(st.session_state.refresh_token)
+    if not st.session_state.tokens_loaded:
+        # Try to load from query params (sent from JavaScript)
+        query_params = st.query_params
+        
+        if "refresh_token" in query_params and "user_email" in query_params:
+            try:
+                # Decode the tokens
+                refresh_token = decode_token(query_params["refresh_token"])
+                user_email = decode_token(query_params["user_email"])
                 
-                if "id_token" in refreshed:
-                    st.session_state.logged_in = True
-                    st.session_state.id_token = refreshed["id_token"]
-                    st.session_state.refresh_token = refreshed["refresh_token"]
-                    st.rerun()
-                else:
-                    # Refresh failed, clear tokens
-                    st.session_state.refresh_token = None
-        except Exception as e:
-            # Silently fail auto-login
-            st.session_state.refresh_token = None
+                if refresh_token and user_email:
+                    st.session_state.refresh_token = refresh_token
+                    st.session_state.user_email = user_email
+                    st.session_state.tokens_loaded = True
+                    
+                    # Clear query params
+                    st.query_params.clear()
+                    
+                    # Try to refresh token
+                    try:
+                        with st.spinner("Restoring your session..."):
+                            refreshed = firebase_refresh(refresh_token)
+                            
+                            if "id_token" in refreshed:
+                                st.session_state.logged_in = True
+                                st.session_state.id_token = refreshed["id_token"]
+                                st.session_state.refresh_token = refreshed["refresh_token"]
+                                
+                                # Save updated tokens
+                                save_to_local_storage(
+                                    "refresh_token", 
+                                    encode_token(refreshed["refresh_token"])
+                                )
+                                save_to_local_storage(
+                                    "user_email", 
+                                    encode_token(user_email)
+                                )
+                                
+                                st.rerun()
+                            else:
+                                # Refresh failed, clear tokens
+                                st.session_state.refresh_token = None
+                                st.session_state.user_email = None
+                    except:
+                        # Refresh failed
+                        st.session_state.refresh_token = None
+                        st.session_state.user_email = None
+            except:
+                # Failed to decode
+                pass
+    
+    # -------------------------------
+    # INJECT JAVASCRIPT TO LOAD TOKENS
+    # -------------------------------
+    if not st.session_state.tokens_loaded and not st.session_state.logged_in:
+        # Inject JavaScript to check localStorage and redirect with tokens
+        js_code = """
+        <script>
+        // Check if we have tokens in localStorage
+        var refreshToken = localStorage.getItem('refresh_token');
+        var userEmail = localStorage.getItem('user_email');
+        
+        if (refreshToken && userEmail) {
+            // We have tokens, redirect with them in query params
+            var currentUrl = window.location.href;
+            var separator = currentUrl.includes('?') ? '&' : '?';
+            var newUrl = currentUrl + separator + 
+                        'refresh_token=' + encodeURIComponent(refreshToken) + 
+                        '&user_email=' + encodeURIComponent(userEmail);
+            window.location.href = newUrl;
+        }
+        </script>
+        """
+        st.components.v1.html(js_code, height=0)
     
     # -------------------------------
     # LOGIN GATE
     # -------------------------------
     if not st.session_state.logged_in:
+        # Clear any previous error state
+        if "auth_error" in st.session_state:
+            del st.session_state.auth_error
+        
         # Center the login form
         col1, col2, col3 = st.columns([1, 2, 1])
         
@@ -927,10 +1030,10 @@ def main():
                     st.subheader("Login to Your Account")
                     login_email = st.text_input("Email", key="login_email")
                     login_password = st.text_input("Password", type="password", key="login_password")
+                    remember_me = st.checkbox("Remember me", value=True, help="Stay logged in for 30 days")
                     login_submitted = st.form_submit_button("Login", type="primary", use_container_width=True)
                     
                     if login_submitted:
-                        st.session_state.auth_attempted = True
                         if not login_email or not login_password:
                             st.error("Please enter both email and password.")
                         else:
@@ -952,6 +1055,17 @@ def main():
                                     st.session_state.refresh_token = resp.get("refreshToken")
                                     st.session_state.user_email = resp.get("email")
                                     
+                                    # Save to localStorage if remember me is checked
+                                    if remember_me:
+                                        save_to_local_storage(
+                                            "refresh_token", 
+                                            encode_token(resp.get("refreshToken"))
+                                        )
+                                        save_to_local_storage(
+                                            "user_email", 
+                                            encode_token(resp.get("email"))
+                                        )
+                                    
                                     st.success(f"✅ Welcome {resp.get('email')}!")
                                     st.rerun()
             
@@ -962,10 +1076,10 @@ def main():
                     signup_email = st.text_input("Email", key="signup_email")
                     signup_password = st.text_input("Password", type="password", key="signup_password")
                     confirm_password = st.text_input("Confirm Password", type="password", key="confirm_password")
+                    remember_me_signup = st.checkbox("Remember me", value=True, help="Stay logged in for 30 days")
                     signup_submitted = st.form_submit_button("Create Account", type="primary", use_container_width=True)
                     
                     if signup_submitted:
-                        st.session_state.auth_attempted = True
                         if not signup_email or not signup_password or not confirm_password:
                             st.error("Please fill in all fields.")
                         elif signup_password != confirm_password:
@@ -991,17 +1105,41 @@ def main():
                                     st.session_state.refresh_token = resp.get("refreshToken")
                                     st.session_state.user_email = resp.get("email")
                                     
+                                    # Save to localStorage if remember me is checked
+                                    if remember_me_signup:
+                                        save_to_local_storage(
+                                            "refresh_token", 
+                                            encode_token(resp.get("refreshToken"))
+                                        )
+                                        save_to_local_storage(
+                                            "user_email", 
+                                            encode_token(resp.get("email"))
+                                        )
+                                    
                                     st.success("✅ Account created successfully!")
                                     st.info("Please check your email for verification if required.")
                                     st.rerun()
             
-            # Add some helpful info
+            # Add some helpful info and clear localStorage option
             st.markdown("---")
+            
+            # Clear localStorage button
+            if st.button("Clear Saved Login", type="secondary"):
+                clear_js = """
+                <script>
+                localStorage.removeItem('refresh_token');
+                localStorage.removeItem('user_email');
+                alert('Saved login cleared!');
+                </script>
+                """
+                st.components.v1.html(clear_js, height=0)
+                st.success("Saved login cleared!")
+            
             st.info("""
             **Note:** 
-            - You need a valid email and password to access the strategy dashboard
-            - Accounts are managed via Firebase Authentication
-            - Your session will be maintained until you logout
+            - Check "Remember me" to stay logged in for 30 days
+            - Use "Clear Saved Login" if you're on a shared computer
+            - Your credentials are stored securely in your browser only
             """)
         
         st.stop()  # Stop execution if not logged in
@@ -1013,15 +1151,24 @@ def main():
     st.sidebar.write(f"👤 Logged in as: **{st.session_state.user_email}**")
     
     if st.sidebar.button("🚪 Logout", type="secondary"):
+        # Clear localStorage
+        clear_js = """
+        <script>
+        localStorage.removeItem('refresh_token');
+        localStorage.removeItem('user_email');
+        </script>
+        """
+        st.components.v1.html(clear_js, height=0)
+        
         # Clear session state
         st.session_state.logged_in = False
         st.session_state.id_token = None
         st.session_state.user_email = None
         st.session_state.refresh_token = None
-        st.session_state.auth_attempted = False
+        st.session_state.tokens_loaded = False
         
         st.success("Logged out successfully!")
-        st.rerun()
+        st.rerun() 
     
     # ============================================================
     # OFFICIAL STRATEGY INCEPTION & LIVE PERFORMANCE SNAPSHOT

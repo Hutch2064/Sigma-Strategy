@@ -1285,7 +1285,7 @@ def main():
     # SINCE-INCEPTION EQUITY CURVE
     # ============================================================
 
-    st.subheader("📈 Since-Inception Performance (Sigma vs Buy & Hold vs QQQ)")
+    st.subheader("Your Performance (Sigma vs Buy & Hold vs Benchmark)")
 
     fig, ax = plt.subplots(figsize=(12, 6))
 

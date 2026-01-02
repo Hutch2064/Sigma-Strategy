@@ -291,22 +291,40 @@ def load_user_preferences(id_token, user_email):
     except:
         return None
 
-@st.cache_data(show_spinner=True)
+@st.cache_data(ttl=3600, show_spinner=True)  # Cache for 1 hour
 def load_price_data(tickers, start_date, end_date=None):
-    data = yf.download(tickers, start=start_date, end=end_date, progress=False)
+    import time
+    
+    # Retry logic with exponential backoff
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            # Add increasing delay between attempts
+            if attempt > 0:
+                time.sleep(2 ** attempt)  # 2, 4 seconds on retries
+            
+            data = yf.download(tickers, start=start_date, end=end_date, progress=False)
+            
+            # Prefer Adjusted Close, but fall back to Close if Adj Close is missing
+            if "Adj Close" in data.columns:
+                px = data["Adj Close"].copy()
+                if "Close" in data.columns:
+                    px = px.combine_first(data["Close"])
+            else:
+                px = data["Close"].copy()
 
-    # Prefer Adjusted Close, but fall back to Close if Adj Close is missing
-    if "Adj Close" in data.columns:
-        px = data["Adj Close"].copy()
-        if "Close" in data.columns:
-            px = px.combine_first(data["Close"])
-    else:
-        px = data["Close"].copy()
+            if isinstance(px, pd.Series):
+                px = px.to_frame(name=tickers[0])
 
-    if isinstance(px, pd.Series):
-        px = px.to_frame(name=tickers[0])
-
-    return px.dropna(how="all")
+            return px.dropna(how="all")
+            
+        except Exception as e:
+            if attempt == max_retries - 1:  # Last attempt
+                st.error(f"Failed to load data after {max_retries} attempts: {str(e)}")
+                raise
+            else:
+                st.warning(f"Data load attempt {attempt + 1} failed, retrying...")
+                continue
 
 
 # ============================================================
@@ -1064,6 +1082,27 @@ def plot_monte_carlo_results(results_dict, strategy_names):
 # ============================================================
 
 def main():
+    # ============================================================
+    # RATE LIMITING PROTECTION
+    # ============================================================
+    import time
+    
+    if 'last_data_request' not in st.session_state:
+        st.session_state.last_data_request = 0
+    
+    # Ensure minimum time between data requests
+    current_time = time.time()
+    time_since_last = current_time - st.session_state.last_data_request
+    
+    if time_since_last < 2.0:  # Minimum 2 seconds between data requests
+        time.sleep(2.0 - time_since_last)
+    
+    st.session_state.last_data_request = time.time()
+    
+    # ============================================================
+    # Check if secrets are available
+    # ============================================================
+    
     # Check if secrets are available
     if "firebase" not in st.secrets:
         st.error("Firebase configuration not found in secrets. Please check your secrets.toml file.")
@@ -1081,17 +1120,23 @@ def main():
     init_session_state()
     
     # -------------------------------
-    # LOAD TOKENS FROM LOCAL STORAGE (ONCE)
+    # LOAD TOKENS FROM LOCAL STORAGE (SIMPLIFIED)
     # -------------------------------
-    if not st.session_state.tokens_loaded:
-        # Try to load from query params (sent from JavaScript)
+    if not st.session_state.tokens_loaded and not st.session_state.logged_in:
+        # Try to get from query params directly
         query_params = st.query_params
         
         if "refresh_token" in query_params and "user_email" in query_params:
             try:
-                # Decode the tokens
-                refresh_token = decode_token(query_params["refresh_token"])
-                user_email = decode_token(query_params["user_email"])
+                # Get tokens (may already be decoded)
+                refresh_token = query_params["refresh_token"]
+                user_email = query_params["user_email"]
+                
+                # Check if they need decoding
+                if "=" in refresh_token:  # Looks base64 encoded
+                    refresh_token = decode_token(refresh_token)
+                if "=" in user_email:
+                    user_email = decode_token(user_email)
                 
                 if refresh_token and user_email:
                     st.session_state.refresh_token = refresh_token
@@ -1101,7 +1146,7 @@ def main():
                     # Clear query params
                     st.query_params.clear()
                     
-                    # Try to refresh token
+                    # Refresh token
                     try:
                         with st.spinner("Restoring your session..."):
                             refreshed = firebase_refresh(refresh_token)
@@ -1110,53 +1155,15 @@ def main():
                                 st.session_state.logged_in = True
                                 st.session_state.id_token = refreshed["id_token"]
                                 st.session_state.refresh_token = refreshed["refresh_token"]
-                                
-                                # Save updated tokens
-                                save_to_local_storage(
-                                    "refresh_token", 
-                                    encode_token(refreshed["refresh_token"])
-                                )
-                                save_to_local_storage(
-                                    "user_email", 
-                                    encode_token(user_email)
-                                )
-                                
                                 st.rerun()
-                            else:
-                                # Refresh failed, clear tokens
-                                st.session_state.refresh_token = None
-                                st.session_state.user_email = None
                     except:
                         # Refresh failed
                         st.session_state.refresh_token = None
                         st.session_state.user_email = None
+                        st.session_state.tokens_loaded = False
             except:
-                # Failed to decode
+                # Failed to process
                 pass
-    
-    # -------------------------------
-    # INJECT JAVASCRIPT TO LOAD TOKENS
-    # -------------------------------
-    if not st.session_state.tokens_loaded and not st.session_state.logged_in:
-        # Inject JavaScript to check localStorage and redirect with tokens
-        js_code = """
-        <script>
-        // Check if we have tokens in localStorage
-        var refreshToken = localStorage.getItem('refresh_token');
-        var userEmail = localStorage.getItem('user_email');
-        
-        if (refreshToken && userEmail) {
-            // We have tokens, redirect with them in query params
-            var currentUrl = window.location.href;
-            var separator = currentUrl.includes('?') ? '&' : '?';
-            var newUrl = currentUrl + separator + 
-                        'refresh_token=' + encodeURIComponent(refreshToken) + 
-                        '&user_email=' + encodeURIComponent(userEmail);
-            window.location.href = newUrl;
-        }
-        </script>
-        """
-        st.components.v1.html(js_code, height=0)
     
     # -------------------------------
     # LOGIN GATE

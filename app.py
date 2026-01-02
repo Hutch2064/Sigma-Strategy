@@ -64,8 +64,8 @@ def init_session_state():
         st.session_state.auth_initialized = False
     if "tokens_loaded" not in st.session_state:
         st.session_state.tokens_loaded = False
-    if "saved_preferences" not in st.session_state:  # ADD THIS LINE
-        st.session_state.saved_preferences = None     # ADD THIS LINE
+    if "saved_preferences" not in st.session_state:  # ADDED: For user preferences
+        st.session_state.saved_preferences = None
 
 # ============================================================
 # CONFIG
@@ -115,38 +115,7 @@ def firebase_login(email, password):
     return r.json()
 
 def firebase_signup(email, password):
-    api_key = st.secrets["firebase"]["apiKey"]
-    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={api_key}"
-
-    payload = {
-        "email": email,
-        "password": password,
-        "returnSecureToken": True
-    }
-
-    try:
-        r = requests.post(url, json=payload)
-        return r.json()
-    except Exception as e:
-        return {"error": {"message": f"Connection error: {str(e)}"}}
-
-def firebase_signup(email, password):
-    api_key = st.secrets["firebase"]["apiKey"]
-    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={api_key}"
-
-    payload = {
-        "email": email,
-        "password": password,
-        "returnSecureToken": True
-    }
-
-    try:
-        r = requests.post(url, json=payload)
-        return r.json()
-    except Exception as e:
-        return {"error": {"message": f"Connection error: {str(e)}"}}
-    
-def firebase_signup(email, password):
+    """Sign up new user - KEEP ONLY THIS ONE (removed duplicates)"""
     api_key = st.secrets["firebase"]["apiKey"]
     url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={api_key}"
 
@@ -173,7 +142,7 @@ def firebase_refresh(refresh_token):
 
     r = requests.post(url, data=payload)
     return r.json()
-    
+
 def firestore_create_user(id_token, email):
     """Create initial user document with default preferences"""
     project_id = st.secrets["firebase"]["projectId"]
@@ -320,18 +289,6 @@ def load_user_preferences(id_token, user_email):
         
         return None  # No preferences found
     except:
-        return None
-
-def extract_user_id_from_token(id_token):
-    """Extract user ID from Firebase ID token (simplified)"""
-    try:
-        # Firebase tokens are JWTs, we can decode the middle part
-        import jwt
-        # Note: This is a simplified version. In production, verify the token properly
-        decoded = jwt.decode(id_token, options={"verify_signature": False})
-        return decoded.get("user_id") or decoded.get("sub")
-    except:
-        # If we can't decode, generate a fallback ID (not ideal but works for now)
         return None
 
 @st.cache_data(show_spinner=True)
@@ -1234,6 +1191,15 @@ def main():
                             with st.spinner("Authenticating..."):
                                 resp = firebase_login(login_email, login_password)
                                 
+                                if "error" in resp:
+                                    msg = resp["error"].get("message", "Authentication failed.")
+                                    pretty = {
+                                        "EMAIL_EXISTS": "Account already exists. Try logging in.",
+                                        "INVALID_PASSWORD": "Invalid password.",
+                                        "EMAIL_NOT_FOUND": "Email not found.",
+                                        "INVALID_EMAIL": "Invalid email format.",
+                                    }.get(msg, f"Error: {msg}")
+                                    st.error(pretty)
                                 else:
                                     st.session_state.logged_in = True
                                     st.session_state.id_token = resp.get("idToken")
@@ -1293,6 +1259,14 @@ def main():
                             with st.spinner("Creating account..."):
                                 resp = firebase_signup(signup_email, signup_password)
                                 
+                                if "error" in resp:
+                                    msg = resp["error"].get("message", "Signup failed.")
+                                    pretty = {
+                                        "EMAIL_EXISTS": "Email already exists. Please login instead.",
+                                        "WEAK_PASSWORD": "Password should be at least 6 characters.",
+                                        "INVALID_EMAIL": "Invalid email format.",
+                                    }.get(msg, f"Error: {msg}")
+                                    st.error(pretty)
                                 else:
                                     # Auto-login after successful signup
                                     st.session_state.logged_in = True
@@ -1391,33 +1365,52 @@ def main():
         "— performance after this date is documented for actual performance tracking."
     )
 
-    # Backtest inputs unchanged...
-    start = st.sidebar.text_input("Start Date", DEFAULT_START_DATE)
+    # ============================================================
+    # LOAD SAVED PREFERENCES FOR SIDEBAR INPUTS
+    # ============================================================
+    
+    # Get saved preferences if user is logged in
+    saved_prefs = None
+    if st.session_state.logged_in and st.session_state.saved_preferences:
+        saved_prefs = st.session_state.saved_preferences
+    
+    # Start date with saved preference
+    default_start = saved_prefs.get("start_date", DEFAULT_START_DATE) if saved_prefs else DEFAULT_START_DATE
+    start = st.sidebar.text_input("Start Date", default_start)
     end = st.sidebar.text_input("End Date (optional)", "")
 
     st.sidebar.header("Risk On Capital")
+    # Risk On tickers with saved preference
+    default_risk_on_tickers = saved_prefs.get("risk_on_tickers", ",".join(RISK_ON_WEIGHTS.keys())) if saved_prefs else ",".join(RISK_ON_WEIGHTS.keys())
+    default_risk_on_weights = saved_prefs.get("risk_on_weights", ",".join(str(w) for w in RISK_ON_WEIGHTS.values())) if saved_prefs else ",".join(str(w) for w in RISK_ON_WEIGHTS.values())
+    
     risk_on_tickers_str = st.sidebar.text_input(
-        "Tickers", ",".join(RISK_ON_WEIGHTS.keys())
+        "Tickers", default_risk_on_tickers
     )
     risk_on_weights_str = st.sidebar.text_input(
-        "Weights", ",".join(str(w) for w in RISK_ON_WEIGHTS.values())
+        "Weights", default_risk_on_weights
     )
 
     st.sidebar.header("Risk Off Capital")
+    # Risk Off tickers with saved preference
+    default_risk_off_tickers = saved_prefs.get("risk_off_tickers", ",".join(RISK_OFF_WEIGHTS.keys())) if saved_prefs else ",".join(RISK_OFF_WEIGHTS.keys())
+    default_risk_off_weights = saved_prefs.get("risk_off_weights", ",".join(str(w) for w in RISK_OFF_WEIGHTS.values())) if saved_prefs else ",".join(str(w) for w in RISK_OFF_WEIGHTS.values())
+    
     risk_off_tickers_str = st.sidebar.text_input(
-        "Tickers", ",".join(RISK_OFF_WEIGHTS.keys())
+        "Tickers", default_risk_off_tickers
     )
     risk_off_weights_str = st.sidebar.text_input(
-        "Weights", ",".join(str(w) for w in RISK_OFF_WEIGHTS.values())
+        "Weights", default_risk_off_weights
     )
     
     # PORTFOLIO DRAG INPUT
     st.sidebar.header("Portfolio Drag")
+    default_drag = saved_prefs.get("annual_drag_pct", 0.0) if saved_prefs else 0.0
     annual_drag_pct = st.sidebar.number_input(
         "Annual Portfolio Drag (%)", 
         min_value=0.0, 
         max_value=20.0, 
-        value=0.0,  # Default to 0% (no drag)
+        value=float(default_drag),  # Use saved value
         step=0.1,
         format="%.1f",
         help="Annual decay/drag applied to entire portfolio. Use ~4.0% for leveraged ETFs."
@@ -1427,20 +1420,66 @@ def main():
     # REMOVED OPTIMIZATION SETTINGS
     
     st.sidebar.header("Quarterly Portfolio Values")
-    qs_cap_1 = st.sidebar.number_input("Taxable – Portfolio Value at Last Rebalance ($)", min_value=0.0, value=75815.26, step=100.0)
-    qs_cap_2 = st.sidebar.number_input("Tax-Sheltered – Portfolio Value at Last Rebalance ($)", min_value=0.0, value=10074.83, step=100.0)
-    qs_cap_3 = st.sidebar.number_input("Joint – Portfolio Value at Last Rebalance ($)", min_value=0.0, value=4189.76, step=100.0)
+    # Portfolio values with saved preferences
+    default_qs_cap_1 = saved_prefs.get("qs_cap_1", 75815.26) if saved_prefs else 75815.26
+    default_qs_cap_2 = saved_prefs.get("qs_cap_2", 10074.83) if saved_prefs else 10074.83
+    default_qs_cap_3 = saved_prefs.get("qs_cap_3", 4189.76) if saved_prefs else 4189.76
+    
+    qs_cap_1 = st.sidebar.number_input("Taxable – Portfolio Value at Last Rebalance ($)", min_value=0.0, value=float(default_qs_cap_1), step=100.0)
+    qs_cap_2 = st.sidebar.number_input("Tax-Sheltered – Portfolio Value at Last Rebalance ($)", min_value=0.0, value=float(default_qs_cap_2), step=100.0)
+    qs_cap_3 = st.sidebar.number_input("Joint – Portfolio Value at Last Rebalance ($)", min_value=0.0, value=float(default_qs_cap_3), step=100.0)
 
     st.sidebar.header("Current Portfolio Values (Today)")
-    real_cap_1 = st.sidebar.number_input("Taxable – Portfolio Value Today ($)", min_value=0.0, value=68832.42, step=100.0)
-    real_cap_2 = st.sidebar.number_input("Tax-Sheltered – Portfolio Value Today ($)", min_value=0.0, value=9265.91, step=100.0)
-    real_cap_3 = st.sidebar.number_input("Joint – Portfolio Value Today ($)", min_value=0.0, value=3930.23, step=100.0)
+    # Current portfolio values with saved preferences
+    default_real_cap_1 = saved_prefs.get("real_cap_1", 68832.42) if saved_prefs else 68832.42
+    default_real_cap_2 = saved_prefs.get("real_cap_2", 9265.91) if saved_prefs else 9265.91
+    default_real_cap_3 = saved_prefs.get("real_cap_3", 3930.23) if saved_prefs else 3930.23
+    
+    real_cap_1 = st.sidebar.number_input("Taxable – Portfolio Value Today ($)", min_value=0.0, value=float(default_real_cap_1), step=100.0)
+    real_cap_2 = st.sidebar.number_input("Tax-Sheltered – Portfolio Value Today ($)", min_value=0.0, value=float(default_real_cap_2), step=100.0)
+    real_cap_3 = st.sidebar.number_input("Joint – Portfolio Value Today ($)", min_value=0.0, value=float(default_real_cap_3), step=100.0)
 
     # Add fixed parameters display
     st.sidebar.header("Fixed Parameters")
     st.sidebar.write(f"**MA Length:** {FIXED_MA_LENGTH}")
     st.sidebar.write(f"**MA Type:** {FIXED_MA_TYPE.upper()}")
     st.sidebar.write(f"**Portfolio Drag:** {annual_drag_pct:.1f}% annual")
+    
+    # ============================================================
+    # SAVE SETTINGS BUTTON
+    # ============================================================
+    if st.session_state.logged_in:
+        st.sidebar.markdown("---")
+        if st.sidebar.button("💾 Save Current Settings", type="primary"):
+            # Collect all current settings
+            preferences = {
+                "start_date": start,
+                "risk_on_tickers": risk_on_tickers_str,
+                "risk_on_weights": risk_on_weights_str,
+                "risk_off_tickers": risk_off_tickers_str,
+                "risk_off_weights": risk_off_weights_str,
+                "annual_drag_pct": annual_drag_pct,
+                "qs_cap_1": qs_cap_1,
+                "qs_cap_2": qs_cap_2,
+                "qs_cap_3": qs_cap_3,
+                "real_cap_1": real_cap_1,
+                "real_cap_2": real_cap_2,
+                "real_cap_3": real_cap_3,
+            }
+            
+            # Save to Firestore
+            success = save_user_preferences(
+                st.session_state.id_token,
+                st.session_state.user_email,
+                preferences
+            )
+            
+            if success:
+                st.sidebar.success("✅ Settings saved to your account!")
+                # Update session state
+                st.session_state.saved_preferences = preferences
+            else:
+                st.sidebar.error("❌ Failed to save settings")
     
     run_clicked = st.sidebar.button("Run Backtest")
     if not run_clicked:

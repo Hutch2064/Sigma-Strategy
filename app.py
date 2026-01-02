@@ -962,10 +962,10 @@ def main():
     # ============================================================
     
     # Start date with saved preference
-    start = st.sidebar.text_input("Start Date", user_prefs["start_date"])
+    start = st.sidebar.text_input("Backtest Start Date", user_prefs["start_date"])
     
     # End date with saved preference
-    end = st.sidebar.text_input("End Date (optional)", user_prefs["end_date"])
+    end = st.sidebar.text_input("Backtest End Date (optional)", user_prefs["end_date"])
 
     st.sidebar.header("Risk On Capital")
     # Risk On tickers with saved preference

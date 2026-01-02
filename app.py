@@ -1,3 +1,23 @@
+import streamlit as st
+from simple_auth import show_auth_page
+
+# ============================================================
+# AUTHENTICATION - ADD THIS AT THE VERY TOP
+# ============================================================
+
+# Show auth page - this will stop execution if not authenticated
+user = show_auth_page()
+
+# Now show logout button in sidebar if authenticated
+if user:
+    st.sidebar.markdown(f"**Welcome, {user['full_name']}**")
+    st.sidebar.markdown(f"*{user['email']}*")
+    
+    if st.sidebar.button("Logout"):
+        st.session_state.authenticated = False
+        st.session_state.user = None
+        st.rerun()
+
 import numpy as np
 import pandas as pd
 import yfinance as yf

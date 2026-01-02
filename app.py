@@ -6,6 +6,21 @@ import streamlit as st
 import datetime
 from scipy.optimize import minimize
 
+import streamlit as st
+
+st.set_page_config(
+    page_title="Sigma Strategy",
+    layout="wide"
+)
+
+tabs = st.tabs([
+    "Home",
+    "Implementation",
+    "Backtest",
+    "Current Weights",
+    "Support"
+])
+
 # ============================================================
 # CONFIG
 # ============================================================

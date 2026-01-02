@@ -1075,10 +1075,10 @@ def main():
                                     st.session_state.refresh_token = resp.get("refreshToken")
                                     st.session_state.user_email = resp.get("email")
                                     
-                                firestore_create_user(
-                                    st.session_state.id_token,
-                                    st.session_state.user_email
-                                )
+                                    firestore_create_user(
+                                        st.session_state.id_token,
+                                        st.session_state.user_email
+                                    )
                                     
                                     
                                     # Save to localStorage if remember me is checked
@@ -1131,13 +1131,11 @@ def main():
                                     st.session_state.refresh_token = resp.get("refreshToken")
                                     st.session_state.user_email = resp.get("email")
                                 
-                                firestore_create_user(
-                                    st.session_state.id_token,
-                                    st.session_state.user_email
-                                )
-                                
-                                
-        
+                                    firestore_create_user(
+                                        st.session_state.id_token,
+                                        st.session_state.user_email
+                                    )
+                            
                                     # Save to localStorage if remember me is checked
                                     if remember_me_signup:
                                         save_to_local_storage(

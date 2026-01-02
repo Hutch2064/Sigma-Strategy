@@ -47,9 +47,5 @@ def get_default_preferences():
         "risk_off_weights": "1.0",
         "annual_drag_pct": 0.0,
         "qs_cap_1": 75815.26,
-        "qs_cap_2": 10074.83,
-        "qs_cap_3": 4189.76,
-        "real_cap_1": 68832.42,
-        "real_cap_2": 9265.91,
-        "real_cap_3": 3930.23
+        "real_cap_1": 68832.42
     }

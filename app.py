@@ -58,19 +58,19 @@ class PortfolioPreferences:
         self.preferences = self.load_preferences()
     
     def _get_default_preferences(self):
-    """Return default preferences for new users"""
-    return {
-        "start_date": "1900-01-01",
-        "risk_on_tickers": "TQQQ",
-        "risk_on_weights": "1.0",
-        "risk_off_tickers": "AGG",
-        "risk_off_weights": "1.0",
-        "annual_drag_pct": 0.0,
-        "qs_cap_1": 10000,
-        "real_cap_1": 10000,
-        "end_date": "",  # Empty for current date
-        "official_inception_date": "2025-12-22",  # ← ADD THIS LINE
-    }
+        """Return default preferences for new users"""
+        return {
+            "start_date": "1900-01-01",
+            "risk_on_tickers": "TQQQ",
+            "risk_on_weights": "1.0",
+            "risk_off_tickers": "AGG",
+            "risk_off_weights": "1.0",
+            "annual_drag_pct": 0.0,
+            "qs_cap_1": 10000,
+            "real_cap_1": 10000,
+            "end_date": "",  # Empty for current date
+            "official_inception_date": "2025-12-22",  # ← ADD THIS LINE
+        }
     
     
     def load_preferences(self):

@@ -107,6 +107,9 @@ class PortfolioPreferences:
             "end_date": "",  # Empty for current date
             "official_inception_date": "2025-12-22",  # ← ADD THIS LINE
             "benchmark_ticker": "QQQ",
+            "ma_source_type": "risk_on",   # "risk_on" or "custom"
+            "ma_tickers": "QQQ",
+            "ma_weights": "1.0",
         } 
     
     
@@ -1043,6 +1046,34 @@ def main():
         key="risk_off_weights_input"
     )
     
+    # ============================================================
+    # 200-DAY MA EVALUATION SOURCE
+    # ============================================================
+
+    st.sidebar.header("200-Day MA Evaluation")
+
+    ma_source_choice = st.sidebar.selectbox(
+        "MA Source",
+        ["Use Risk-On Allocation", "Use Custom Ticker / Portfolio"],
+        index=0 if user_prefs["ma_source_type"] == "risk_on" else 1,
+        help="Controls what asset(s) define the MA regime (NOT what you hold)."
+    )
+
+    if ma_source_choice == "Use Custom Ticker / Portfolio":
+        ma_tickers_str = st.sidebar.text_input(
+            "MA Tickers",
+            user_prefs["ma_tickers"],
+            help="Example: QQQ or QQQ,SPY"
+        )
+        ma_weights_str = st.sidebar.text_input(
+            "MA Weights",
+            user_prefs["ma_weights"],
+            help="Weights must sum to 1.0"
+        )
+    else:
+        ma_tickers_str = None
+        ma_weights_str = None
+    
     # PORTFOLIO DRAG INPUT with saved preference
     st.sidebar.header("Portfolio Drag")
     annual_drag_pct = st.sidebar.number_input(
@@ -1105,6 +1136,9 @@ def main():
                 "end_date": end,
                 "official_inception_date": official_inception_date,
                 "benchmark_ticker": benchmark_ticker,
+                "ma_source_type": "custom" if ma_source_choice == "Use Custom Ticker / Portfolio" else "risk_on",
+                "ma_tickers": ma_tickers_str if ma_tickers_str else user_prefs["ma_tickers"],
+                "ma_weights": ma_weights_str if ma_weights_str else user_prefs["ma_weights"],
              }
             
             # Save to user's file
@@ -1156,7 +1190,29 @@ def main():
     
     
     # Generate signal with fixed parameters
-    portfolio_index = build_portfolio_index(prices, risk_on_weights, annual_drag_pct=annual_drag_decimal)
+    # ============================================================
+    # MA EVALUATION INDEX (NEW LOGIC)
+    # ============================================================
+
+    if user_prefs["ma_source_type"] == "custom":
+        ma_tickers = [t.strip().upper() for t in user_prefs["ma_tickers"].split(",")]
+        ma_weights_list = [float(x) for x in user_prefs["ma_weights"].split(",")]
+        ma_weights = dict(zip(ma_tickers, ma_weights_list))
+
+        ma_prices = load_price_data(ma_tickers, start, end_val)
+
+        portfolio_index = build_portfolio_index(
+            ma_prices,
+            ma_weights,
+            annual_drag_pct=0.0   # IMPORTANT: no leverage drag on regime signal
+        )
+
+    else:
+        portfolio_index = build_portfolio_index(
+            prices,
+            risk_on_weights,
+            annual_drag_pct=annual_drag_decimal
+        )
     
     # ============================================================
     # OPTIMAL TOLERANCE (Sharpe per trade)

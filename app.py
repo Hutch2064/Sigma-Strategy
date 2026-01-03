@@ -680,9 +680,9 @@ def compute_quarter_progress(risky_start, risky_today, quarterly_target):
     pct_gap = gap / risky_start if risky_start > 0 else 0
 
     return {
-        "Deployed Capital at Last Rebalance ($)": risky_start,
-        "Deployed Capital Today ($)": risky_today,
-        "Deployed Capital Target Next Rebalance ($)": target_risky,
+        "Risk On Capital at Last Rebalance ($)": risky_start,
+        "Risk On Capital Today ($)": risky_today,
+        "Risk On Capital Target Next Rebalance ($)": target_risky,
         "Gap ($)": gap,
         "Gap (%)": pct_gap,
     }
@@ -1454,7 +1454,7 @@ def main():
     else:
         quarter_start_date = dates[0] if len(dates) > 0 else None
 
-    st.subheader("Strategy Summary")
+    st.subheader("Strategy Implementation Summary")
     # Display last actual SIG rebalance instead of quarter start
     if len(hybrid_rebals) > 0:
         last_reb = hybrid_rebals[-1]
@@ -1485,9 +1485,9 @@ def main():
         date_str = next_q.strftime("%m/%d/%Y")
         days_str = f"{days_to_next_q} days"
         if gap > 0:
-            return f"Increase (Buy) Risk On Capital by **${gap:,.2f}** on **{date_str}** ({days_str})"
+            return f"Sell **${gap:,.2f}** of Risk Off Assets and Buy **${gap:,.2f}** of Risk On Assets on **{date_str}** ({days_str})"
         elif gap < 0:
-            return f"Decrease (Sell) Risk On Capital by **${abs(gap):,.2f}** on **{date_str}** ({days_str})"
+            return f"Sell **${abs(gap):,.2f}** of Risk On Assets and Buy **${abs(gap):,.2f}** of Risk Off Assets on **{date_str}** ({days_str})"
         else:
             return f"No rebalance needed until **{date_str}** ({days_str})"
 
@@ -1686,10 +1686,10 @@ def main():
 
         if latest_signal:
             delta = (P - lower) / P
-            st.write(f"**Drop Required for RISK-OFF:** {delta:.2%}")
+            st.write(f"**Drop Required for MA Crossover:** {delta:.2%}")
         else:
             delta = (upper - P) / P
-            st.write(f"**Gain Required for RISK-ON:** {delta:.2%}")
+            st.write(f"**Gain Required for MA Crossover:** {delta:.2%}")
     else:
         st.write("**Insufficient data for MA distance calculation**")
 
@@ -1722,11 +1722,11 @@ def main():
         regime_df = pd.DataFrame(regime_rows, columns=["Regime", "Start", "End", "Duration (days)"])
         st.dataframe(regime_df)
 
-        on_durations = regime_df[regime_df['Regime']=='RISK-ON']['Duration (days)']
-        off_durations = regime_df[regime_df['Regime']=='RISK-OFF']['Duration (days)']
+        on_durations = regime_df[regime_df['Regime']=='MA Above']['Duration (days)']
+        off_durations = regime_df[regime_df['Regime']=='MA Below']['Duration (days)']
         
-        st.write(f"**Avg RISK-ON duration:** {on_durations.mean():.1f} days" if len(on_durations) > 0 else "**Avg RISK-ON duration:** 0 days")
-        st.write(f"**Avg RISK-OFF duration:** {off_durations.mean():.1f} days" if len(off_durations) > 0 else "**Avg RISK-OFF duration:** 0 days")
+        st.write(f"**Avg MA Above duration:** {on_durations.mean():.1f} days" if len(on_durations) > 0 else "**Avg MA Above duration:** 0 days")
+        st.write(f"**Avg MA Below duration:** {off_durations.mean():.1f} days" if len(off_durations) > 0 else "**Avg MA Below duration:** 0 days")
     else:
         st.write("No regime data available")
 

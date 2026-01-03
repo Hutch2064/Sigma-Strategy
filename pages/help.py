@@ -1,8 +1,8 @@
 import streamlit as st
 
-st.set_page_config(page_title="Help", layout="wide")
+st.set_page_config(page_title="Sigma Strategy – Help", layout="wide")
 
-st.title("Help")
+st.title("Sigma Strategy — Help")
 
 st.markdown("""
 ## **Formatting**
@@ -70,4 +70,4 @@ Once all inputs are entered correctly, select **Run** to generate model outputs.
 """)
 
 st.markdown("---")
-st.caption("This page is informational only and does not constitute financial advice.")
+st.caption("Disclaimer: Past performance does not indicate future results. The information provided on this website is for educational purposes only and is not intended as financial advice. No guarantees are made regarding the accuracy or completeness of the data and computations provided. Always seek the advice of your financial advisor or other qualified financial services provider regarding any investment.")

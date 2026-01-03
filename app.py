@@ -1029,7 +1029,7 @@ def main():
     official_inception_date = st.sidebar.text_input(
         "Official Strategy Inception Date", 
         user_prefs["official_inception_date"],
-        help="The date when you officially started tracking this strategy. Performance after this date is considered 'official'."
+        help="The date you officially implemented this strategy."
     )
 
     # BENCHMARK TICKER - ADD THIS SECTION

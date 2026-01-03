@@ -319,12 +319,6 @@ def optimize_tolerance(portfolio_index, opt_ma, prices, risk_on_weights, risk_of
             opt_ma,
             tol_series
         )
-        
-        # ============================================================
-        # ALIGN MA SIGNAL TO PRICE INDEX (CRITICAL FIX)
-        # ============================================================
-
-        sig = sig.reindex(prices.index).ffill().fillna(False)
 
         result = backtest(
             prices,
@@ -620,12 +614,6 @@ def compute_enhanced_performance(simple_returns, eq_curve, rf=0.0):
     }
 
 def backtest(prices, signal, risk_on_weights, risk_off_weights, flip_cost, ma_flip_multiplier=3.0, annual_drag_pct=0.0):
-    
-    # ============================================================
-    # FORCE SIGNAL ALIGNMENT TO PRICE INDEX (CRITICAL)
-    # ============================================================
-    signal = signal.reindex(prices.index).ffill().fillna(False)
-    
     simple = prices.pct_change().fillna(0)
     weights = build_weight_df(prices, signal, risk_on_weights, risk_off_weights)
 
@@ -634,17 +622,14 @@ def backtest(prices, signal, risk_on_weights, risk_off_weights, flip_cost, ma_fl
     flip_mask = sig_arr.diff().abs() == 1
 
     # MA flip costs with multiplier
-    flip_costs = pd.Series(
-        np.where(flip_mask, -flip_cost * ma_flip_multiplier, 0.0),
-        index=strategy_simple.index
-    )
+    flip_costs = np.where(flip_mask, -flip_cost * ma_flip_multiplier, 0.0)
     
     # Apply portfolio drag (if any) to strategy returns
     if annual_drag_pct > 0:
         daily_drag_factor = (1 - annual_drag_pct) ** (1/252)
         strategy_simple = (1 + strategy_simple) * daily_drag_factor - 1
     
-    strat_adj = strategy_simple.add(flip_costs, fill_value=0.0)
+    strat_adj = strategy_simple + flip_costs
 
     eq = (1 + strat_adj).cumprod()
 

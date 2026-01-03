@@ -1611,8 +1611,8 @@ def main():
         P = float(portfolio_index.loc[latest_date])
         MA = float(opt_ma.loc[latest_date])
 
-        upper = MA * (1 + best_tol)
-        lower = MA * (1 - best_tol)
+        upper = MA * (1 + FIXED_MA_TOLERANCE)
+        lower = MA * (1 - FIXED_MA_TOLERANCE)
 
         if latest_signal:
             delta = (P - lower) / P

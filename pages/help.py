@@ -12,10 +12,10 @@ st.markdown("""
 - The order of tickers must correspond to the same order of weights.
 
 **Example:**  
-A portfolio allocation of 25% BTC and 75% SPY should be entered as:
+A portfolio allocation of 75% TQQQ and 25% AGG should be entered as:
 
-- **Tickers:** `BTC-USD, SPY`  
-- **Weights:** `.25, .75`
+- **Tickers:** `TQQQ, AGG`  
+- **Weights:** `.75, .25`
 
 ---
 

@@ -1,8 +1,8 @@
 import streamlit as st
 
-st.set_page_config(page_title="Sigma Strategy – Help", layout="wide")
+st.set_page_config(page_title="Help", layout="wide")
 
-st.title("Sigma Strategy — Help")
+st.title("Help")
 
 st.markdown("""
 ## **Formatting**

@@ -183,7 +183,7 @@ RISK_OFF_WEIGHTS = {
     "AGG": 1.0,
 }
 
-FLIP_COST = 0.000
+FLIP_COST = 0.0005
 
 # Starting weights inside the SIG engine (unchanged)
 START_RISKY = 0.6

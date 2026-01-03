@@ -618,18 +618,14 @@ def backtest(prices, signal, risk_on_weights, risk_off_weights, flip_cost, ma_fl
     weights = build_weight_df(prices, signal, risk_on_weights, risk_off_weights)
 
     strategy_simple = (weights.shift(1).fillna(0) * simple).sum(axis=1)
-    sig_arr = signal.astype(int)
-    flip_mask = sig_arr.diff().abs() == 1
-
-    # MA flip costs with multiplier
-    flip_costs = np.where(flip_mask, -flip_cost * ma_flip_multiplier, 0.0)
+    
     
     # Apply portfolio drag (if any) to strategy returns
     if annual_drag_pct > 0:
         daily_drag_factor = (1 - annual_drag_pct) ** (1/252)
         strategy_simple = (1 + strategy_simple) * daily_drag_factor - 1
     
-    strat_adj = strategy_simple + flip_costs
+    strat_adj = strategy_simple
 
     eq = (1 + strat_adj).cumprod()
 
@@ -639,7 +635,6 @@ def backtest(prices, signal, risk_on_weights, risk_off_weights, flip_cost, ma_fl
         "signal": signal,
         "weights": weights,
         "performance": compute_enhanced_performance(strat_adj, eq),  # Changed to enhanced
-        "flip_mask": flip_mask,
     }
     
 def compute_total_return(eq_series, start_date):

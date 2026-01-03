@@ -1484,12 +1484,22 @@ def main():
     def rebalance_text(gap, next_q, days_to_next_q):
         date_str = next_q.strftime("%m/%d/%Y")
         days_str = f"{days_to_next_q} days"
+
         if gap > 0:
-            return f"Sell **${gap:,.2f}** of Risk Off Assets and Buy **${gap:,.2f}** of Risk On Assets on **{date_str}** ({days_str})"
+            return (
+                f"Sell <strong>${gap:,.2f}</strong> of Risk Off Assets "
+                f"and Buy <strong>${gap:,.2f}</strong> of Risk On Assets "
+                f"on <strong>{date_str}</strong> ({days_str})"
+            )
         elif gap < 0:
-            return f"Sell **${abs(gap):,.2f}** of Risk On Assets and Buy **${abs(gap):,.2f}** of Risk Off Assets on **{date_str}** ({days_str})"
+            gap = abs(gap)
+            return (
+                f"Sell <strong>${gap:,.2f}</strong> of Risk On Assets "
+                f"and Buy <strong>${gap:,.2f}</strong> of Risk Off Assets "
+                f"on <strong>{date_str}</strong> ({days_str})"
+            )
         else:
-            return f"No rebalance needed until **{date_str}** ({days_str})"
+            return f"No rebalance needed until <strong>{date_str}</strong> ({days_str})"
 
     st.write("### Rebalance Recommendations")
     st.write("**Portfolio:** " + rebalance_text(prog_1["Gap ($)"], next_q_end, days_to_next_q))

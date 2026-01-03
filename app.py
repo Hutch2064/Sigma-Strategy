@@ -310,39 +310,66 @@ def run_sig_engine(
     ma_signal,
     pure_sig_rw=None,
     pure_sig_sw=None,
-    quarter_end_dates=None   # <-- must be mapped_q_ends
+    quarter_end_dates=None
 ):
-
-    dates = risk_on_returns.index
-    n = len(dates)
 
     if quarter_end_dates is None:
         raise ValueError("quarter_end_dates must be supplied")
 
-    # Fast lookup
-    quarter_end_set = set(quarter_end_dates)
+    dates = risk_on_returns.index
+    quarter_end_set = set(pd.to_datetime(quarter_end_dates))
 
-    # Init values
     eq = 10000.0
     risky_val = eq * START_RISKY
     safe_val  = eq * START_SAFE
 
-    frozen_risky = None
-    frozen_safe  = None
-
     equity_curve = []
     risky_w_series = []
     safe_w_series = []
-    risky_val_series = []
-    safe_val_series = []
-    rebalance_events = 0
     rebalance_dates = []
 
-    for i in range(n):
-        date = dates[i]
-        r_on = risk_on_returns.iloc[i]
-        r_off = risk_off_returns.iloc[i]
-        ma_on = bool(ma_signal.iloc[i])
+    last_q_date = None
+
+    for i, date in enumerate(dates):
+        # Daily returns
+        risky_val *= (1 + risk_on_returns.iloc[i])
+        safe_val  *= (1 + risk_off_returns.iloc[i])
+
+        # MA regime: force full risk-off
+        if not ma_signal.iloc[i]:
+            risky_val = 0.0
+            safe_val = risky_val + safe_val
+
+        # Quarterly rebalance
+        if date in quarter_end_set:
+            total = risky_val + safe_val
+
+            if ma_signal.iloc[i]:
+                # Resume SIG weights
+                if pure_sig_rw is not None and pure_sig_sw is not None:
+                    risky_w = pure_sig_rw.loc[last_q_date] if last_q_date in pure_sig_rw.index else START_RISKY
+                    safe_w  = pure_sig_sw.loc[last_q_date] if last_q_date in pure_sig_sw.index else START_SAFE
+                else:
+                    risky_w, safe_w = START_RISKY, START_SAFE
+            else:
+                risky_w, safe_w = 0.0, 1.0
+
+            risky_val = total * risky_w
+            safe_val  = total * safe_w
+            rebalance_dates.append(date)
+            last_q_date = date
+
+        total_eq = risky_val + safe_val
+
+        equity_curve.append(total_eq)
+        risky_w_series.append(risky_val / total_eq if total_eq > 0 else 0)
+        safe_w_series.append(safe_val / total_eq if total_eq > 0 else 0)
+
+    eq_series = pd.Series(equity_curve, index=dates)
+    rw_series = pd.Series(risky_w_series, index=dates)
+    sw_series = pd.Series(safe_w_series, index=dates)
+
+    return eq_series, rw_series, sw_series, rebalance_dates
         
 # ============================================================
 # BACKTEST ENGINE WITH DRAG

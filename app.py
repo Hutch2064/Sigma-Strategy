@@ -14,21 +14,19 @@ from pathlib import Path
 
 def show_strategy_overview():
     st.markdown("""
-## **Sigma Strategy Overview**
+## **Sigma System Overview**
 
-This strategy aims to systematically combine the principles of the Sig strategy with the 200 Day Simple Moving Average strategy.
+An automated program that integrates the SIG System with the 200 Day Simple Moving Average Strategy. 
 
 ---
 
-### **The Sig strategy (SIG):**
+### **The SIG System:**
 
 **Quarterly Target Growth Rate (QTGR):**  
-Quarterly growth rate derived from the historical CAGR of the user selected Risk On allocation (e.g., 9sig = 9% QTGR for TQQQ).
+Quarterly Growth Target (QGT): Quarterly growth rate derived from the historical returns of the user selected Risk On allocation (e.g., 9sig = 9% QGT for TQQQ).
 
-At each quarter end:
-- If the Risk On allocation returns **> QTGR**, excess amount ($) over the QTGR is moved to the Risk Off allocation.
-- If the Risk On allocation returns **< QTGR**, then the deficit amount ($) is replenished from the Risk Off allocation to fill the gap between the QTGR and the actual Risk On allocation returns.
-
+- Is your Risk On Allocation above or below its quarterly growth target? If above, it’s a sell signal. If below, it’s a buy signal.
+- If the signal is a Risk On Allocation sell, you will move proceeds of the sale to your Risk Off Allocation in the following order of events: sell an amount of the Risk On Allocation, use that amount to buy more of the Risk Off Allocation. If the signal is a Risk On Allocation buy, you will generate buying power by selling a portion of your Risk Off Allocation, then use the proceeds to buy more of your Risk On Allocation, in the following order of events: sell a portion of the Risk Off Allocation, use the proceeds to buy the Risk On Allocation.
 ---
 
 ### **The 200 Day Simple Moving Average Strategy (SMA or MA):**
@@ -47,7 +45,7 @@ A “Risk Off Regime” = 200 Day sma > Risk On Allocation Index.
 
 - If the 200 Day sma < Risk On Allocation Index, then run the Sig strategy as instructed above.
 - If the 200 Day sma > Risk On Allocation Index, then allocate all capital to the Risk Off Allocation.
-- When model flips from “Risk Off” to “Risk On”, refer to the Allocation Tables and resume Sig strategy weights.
+- When model flips from “Risk Off” to “Risk On”, refer to the Allocation Tables and resume current SIG System weights.
 """)
 
 # ============================================================

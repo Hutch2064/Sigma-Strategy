@@ -1501,8 +1501,12 @@ def main():
         else:
             return f"No rebalance needed until <strong>{date_str}</strong> ({days_str})"
 
-    st.write("### Rebalance Recommendations")
-    st.write("**Portfolio:** " + rebalance_text(prog_1["Gap ($)"], next_q_end, days_to_next_q))
+    st.markdown("### Rebalance Recommendations")
+
+    st.markdown(
+        f"<strong>Portfolio:</strong> {rebalance_text(prog_1['Gap ($)'], next_q_end, days_to_next_q)}",
+        unsafe_allow_html=True
+    )
 
     # ENHANCED ADVANCED METRICS
     def time_in_drawdown(dd): return (dd < 0).mean() if len(dd) > 0 else 0

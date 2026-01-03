@@ -36,8 +36,8 @@ A 200 Day SMA is constructed using a simulated index of the user selected Risk O
 - If the 200 Day SMA < Risk On Allocation Index, then buy & hold the Risk On Allocation.
 - If the 200 Day SMA > Risk On Allocation Index, then sell & hold the Risk Off Allocation.
 
-A “Risk On Regime” = 200 Day SMA < Risk On Allocation Index.  
-A “Risk Off Regime” = 200 Day SMA > Risk On Allocation Index.
+A "Risk On Regime" = 200 Day SMA < Risk On Allocation Index.  
+A "Risk Off Regime" = 200 Day SMA > Risk On Allocation Index.
 
 ---
 
@@ -45,7 +45,7 @@ A “Risk Off Regime” = 200 Day SMA > Risk On Allocation Index.
 
 - If the 200 Day SMA < Risk On Allocation Index, then the model runs the SIG System as instructed above.
 - If the 200 Day SMA > Risk On Allocation Index, then the model allocates all portfolio capital to the Risk Off Allocation.
-- When model flips from “Risk Off” to “Risk On”, the model refers to the Allocation Tables and resumes the current SIG System weights.
+- When model flips from "Risk Off" to "Risk On", the model refers to the Allocation Tables and resumes the current SIG System weights.
 """)
 
 # ============================================================
@@ -105,8 +105,11 @@ class PortfolioPreferences:
             "qs_cap_1": 10000,
             "real_cap_1": 10000,
             "end_date": "",  # Empty for current date
-            "official_inception_date": "2025-12-22",  # ← ADD THIS LINE
+            "official_inception_date": "2025-12-22",
             "benchmark_ticker": "QQQ",
+            "ma_type": "SMA",
+            "ma_length": 200,
+            "tolerance_pct": 0.5,
         } 
     
     
@@ -166,10 +169,6 @@ FLIP_COST = 0.0000
 # Starting weights inside the SIG engine (unchanged)
 START_RISKY = 0.6
 START_SAFE  = 0.4
-
-# FIXED PARAMETERS
-FIXED_MA_LENGTH = 200
-FIXED_MA_TYPE = "SMA"  # or "ema" - you can choose which one to fix
 
 # ============================================================
 # DATA LOADING
@@ -246,7 +245,7 @@ def build_portfolio_index(prices, weights_dict, annual_drag_pct=0.0):
 
 def compute_ma(price_series, length, ma_type):
     """Compute a single MA with fixed parameters"""
-    if ma_type == "ema":
+    if ma_type.lower() == "ema":
         ma = price_series.ewm(span=length, adjust=False).mean()
     else:
         ma = price_series.rolling(window=length, min_periods=1).mean()
@@ -297,55 +296,6 @@ def generate_testfol_signal_vectorized(price, ma, tol_series):
     
     return pd.Series(sig, index=ma.index).fillna(False)
 
-def optimize_tolerance(portfolio_index, opt_ma, prices, risk_on_weights, risk_off_weights, annual_drag_pct=0.0):
-    """
-    Selects tolerance in [0, 5%] that maximizes Sharpe / trades_per_year.
-    """
-
-    def objective(x):
-        tol = float(x[0])
-
-        # Safety bounds
-        if tol < 0 or tol > 0.05:
-            return 1e6
-
-        tol_series = pd.Series(tol, index=portfolio_index.index)
-
-        sig = generate_testfol_signal_vectorized(
-            portfolio_index,
-            opt_ma,
-            tol_series
-        )
-
-        result = backtest(
-            prices,
-            sig,
-            risk_on_weights,
-            risk_off_weights,
-            FLIP_COST,
-            ma_flip_multiplier=3.0,
-            annual_drag_pct=annual_drag_pct
-        )
-
-        sharpe = result["performance"]["Sharpe"]
-
-        switches = sig.astype(int).diff().abs().sum()
-        trades_per_year = switches / (len(sig) / 252)
-
-        if sharpe <= 0 or trades_per_year <= 0:
-            return 1e6
-
-        # MINIMIZE negative Sharpe-per-trade
-        return -(sharpe / trades_per_year)
-
-    res = minimize(
-        objective,
-        x0=[0.002],               # starting guess (irrelevant to solution)
-        bounds=[(0.0, 0.05)],
-        method="L-BFGS-B"
-    )
-
-    return float(res.x[0])
 # ============================================================
 # SIG ENGINE — NOW USING CALENDAR QUARTER-ENDS (B1)
 # ============================================================
@@ -1010,7 +960,7 @@ def main():
         help="The date you officially implemented this strategy."
     )
 
-    # BENCHMARK TICKER - ADD THIS SECTION
+    # BENCHMARK TICKER
     benchmark_ticker = st.sidebar.text_input(
         "Benchmark Ticker for Comparison", 
         user_prefs["benchmark_ticker"],
@@ -1056,7 +1006,34 @@ def main():
     )
     annual_drag_decimal = annual_drag_pct / 100.0
     
-    # REMOVED OPTIMIZATION SETTINGS
+    # MOVING AVERAGE PARAMETERS
+    st.sidebar.header("Moving Average Parameters")
+    
+    ma_type = st.sidebar.selectbox(
+        "MA Type",
+        ["SMA", "EMA"],
+        index=0 if user_prefs["ma_type"] == "SMA" else 1,
+        help="Simple Moving Average or Exponential Moving Average"
+    )
+    
+    ma_length = st.sidebar.slider(
+        "MA Length (days)",
+        min_value=10,
+        max_value=500,
+        value=int(user_prefs["ma_length"]),
+        step=10,
+        help="Length of the moving average window"
+    )
+    
+    tolerance_pct = st.sidebar.slider(
+        "Tolerance (%)",
+        min_value=0.0,
+        max_value=10.0,
+        value=float(user_prefs["tolerance_pct"]),
+        step=0.1,
+        help="Tolerance band around MA for signal generation"
+    )
+    tolerance_decimal = tolerance_pct / 100.0
     
     st.sidebar.header("Quarterly Portfolio Values")
     # Portfolio values with saved preferences - only ONE portfolio now
@@ -1072,10 +1049,11 @@ def main():
                                          value=float(user_prefs["real_cap_1"]), 
                                          step=100.0)
 
-    # Add fixed parameters display
-    st.sidebar.header("Fixed Parameters")
-    st.sidebar.write(f"**MA Length:** {FIXED_MA_LENGTH}")
-    st.sidebar.write(f"**MA Type:** {FIXED_MA_TYPE.upper()}")
+    # Display current parameters
+    st.sidebar.header("Current Parameters")
+    st.sidebar.write(f"**MA Type:** {ma_type}")
+    st.sidebar.write(f"**MA Length:** {ma_length} days")
+    st.sidebar.write(f"**Tolerance:** {tolerance_pct:.1f}%")
     st.sidebar.write(f"**Portfolio Drag:** {annual_drag_pct:.1f}% annual")
     
     st.caption(
@@ -1105,6 +1083,9 @@ def main():
                 "end_date": end,
                 "official_inception_date": official_inception_date,
                 "benchmark_ticker": benchmark_ticker,
+                "ma_type": ma_type,
+                "ma_length": ma_length,
+                "tolerance_pct": tolerance_pct,
              }
             
             # Save to user's file
@@ -1150,35 +1131,26 @@ def main():
     
     st.info(f"Loaded {len(prices)} trading days of data from {prices.index[0].date()} to {prices.index[-1].date()} for backtesting")
     
-    # USE FIXED PARAMETERS INSTEAD OF OPTIMIZATION
-    best_len  = FIXED_MA_LENGTH
-    best_type = FIXED_MA_TYPE
+    # USE USER-SELECTED PARAMETERS
+    best_len  = ma_length
+    best_type = ma_type.lower()  # Convert to lowercase for internal use
     
-    
-    # Generate signal with fixed parameters
+    # Generate signal with user parameters
     portfolio_index = build_portfolio_index(prices, risk_on_weights, annual_drag_pct=annual_drag_decimal)
     
     # ============================================================
-    # OPTIMAL TOLERANCE (Sharpe per trade)
+    # USE USER-SELECTED TOLERANCE
     # ============================================================
 
     opt_ma = compute_ma(portfolio_index, best_len, best_type)
-
-    best_tol = optimize_tolerance(
-        portfolio_index,
-        opt_ma,
-        prices,
-        risk_on_weights,
-        risk_off_weights,
-        annual_drag_pct=annual_drag_decimal
-    )
-
+    
+    # Use user-selected tolerance directly
+    best_tol = tolerance_decimal
     tol_series = pd.Series(best_tol, index=portfolio_index.index)
 
-    st.sidebar.write(f"**Optimal Tolerance:** {best_tol:.2%}")
     st.write(
-        f"**MA Type:** {best_type.upper()}  —  "
-        f"**Length:** {best_len}  —  "
+        f"**MA Type:** {ma_type}  —  "
+        f"**Length:** {best_len} days  —  "
         f"**Tolerance:** {best_tol:.2%}"
     )
     if annual_drag_pct > 0:
@@ -1192,7 +1164,7 @@ def main():
         tol_series
     )
     
-    # Run backtest with fixed parameters
+    # Run backtest with user parameters
     best_result = backtest(prices, sig, risk_on_weights, risk_off_weights, FLIP_COST, 
                           ma_flip_multiplier=3.0, annual_drag_pct=annual_drag_decimal)
     
@@ -1714,11 +1686,11 @@ def main():
         regime_df = pd.DataFrame(regime_rows, columns=["Regime", "Start", "End", "Duration (days)"])
         st.dataframe(regime_df)
 
-        on_durations = regime_df[regime_df['Regime']=='MA Above']['Duration (days)']
-        off_durations = regime_df[regime_df['Regime']=='MA Below']['Duration (days)']
+        on_durations = regime_df[regime_df['Regime']=='RISK-ON']['Duration (days)']
+        off_durations = regime_df[regime_df['Regime']=='RISK-OFF']['Duration (days)']
         
-        st.write(f"**Avg MA Above duration:** {on_durations.mean():.1f} days" if len(on_durations) > 0 else "**Avg MA Above duration:** 0 days")
-        st.write(f"**Avg MA Below duration:** {off_durations.mean():.1f} days" if len(off_durations) > 0 else "**Avg MA Below duration:** 0 days")
+        st.write(f"**Avg RISK-ON duration:** {on_durations.mean():.1f} days" if len(on_durations) > 0 else "**Avg RISK-ON duration:** 0 days")
+        st.write(f"**Avg RISK-OFF duration:** {off_durations.mean():.1f} days" if len(off_durations) > 0 else "**Avg RISK-OFF duration:** 0 days")
     else:
         st.write("No regime data available")
 
@@ -1748,7 +1720,7 @@ def main():
         if len(pure_sig_norm) > 0:
             ax.plot(pure_sig_norm, label="SIG", linewidth=2, color="orange")
         if len(plot_ma_norm) > 0:
-            ax.plot(plot_ma_norm, label=f"MA({best_len}) {best_type.upper()}", linestyle="--", color="black", alpha=0.6)
+            ax.plot(plot_ma_norm, label=f"MA({best_len}) {ma_type}", linestyle="--", color="black", alpha=0.6)
 
         ax.legend()
         ax.grid(alpha=0.3)
@@ -1940,16 +1912,15 @@ def main():
                         "Average in Worst 1% (CVaR 99%)": "{:.2%}"
                     }), use_container_width=True)
                     
-                        
-                        # Monte Carlo assumptions disclaimer
+        # Monte Carlo assumptions disclaimer
         st.info("""
-                        **Monte Carlo Simulation Assumptions:**
-                        - Based on historical return distributions (parametric bootstrap)
-                        - Assumes future volatility similar to historical
-                        - 100,000 simulated 12-month paths per strategy
-                        - Does not account for structural breaks or regime changes
-                        - Past performance ≠ future results
-                        """)
+        **Monte Carlo Simulation Assumptions:**
+        - Based on historical return distributions (parametric bootstrap)
+        - Assumes future volatility similar to historical
+        - 100,000 simulated 12-month paths per strategy
+        - Does not account for structural breaks or regime changes
+        - Past performance ≠ future results
+        """)
     else:
         st.warning("Insufficient data for Monte Carlo simulations. Need at least 100 days of historical data.")
 

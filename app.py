@@ -319,6 +319,12 @@ def optimize_tolerance(portfolio_index, opt_ma, prices, risk_on_weights, risk_of
             opt_ma,
             tol_series
         )
+        
+        # ============================================================
+        # ALIGN MA SIGNAL TO PRICE INDEX (CRITICAL FIX)
+        # ============================================================
+
+        sig = sig.reindex(prices.index).ffill().fillna(False)
 
         result = backtest(
             prices,

@@ -183,7 +183,7 @@ RISK_OFF_WEIGHTS = {
     "AGG": 1.0,
 }
 
-FLIP_COST = 0.0005
+FLIP_COST = 0.000
 
 # Starting weights inside the SIG engine (unchanged)
 START_RISKY = 0.6
@@ -1708,7 +1708,7 @@ def main():
         st.write("**Insufficient data for MA distance calculation**")
 
     # Regime stats plot (unchanged)
-    st.subheader("Regime Statistics")
+    st.subheader("Moving Average Regime Statistics")
     if len(sig) > 0:
         sig_int = sig.astype(int)
         flips = sig_int.diff().fillna(0).ne(0)

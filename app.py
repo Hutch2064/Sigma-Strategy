@@ -172,6 +172,7 @@ START_SAFE  = 0.4
 
 # FIXED PARAMETERS
 FIXED_MA_LENGTH = 200
+FIXED_MA_TOLERANCE = 0.002
 FIXED_MA_TYPE = "SMA"  # or "ema" - you can choose which one to fix
 
 # ============================================================
@@ -300,55 +301,6 @@ def generate_testfol_signal_vectorized(price, ma, tol_series):
     
     return pd.Series(sig, index=ma.index).fillna(False)
 
-def optimize_tolerance(portfolio_index, opt_ma, prices, risk_on_weights, risk_off_weights, annual_drag_pct=0.0):
-    """
-    Selects tolerance in [0, 5%] that maximizes Sharpe / trades_per_year.
-    """
-
-    def objective(x):
-        tol = float(x[0])
-
-        # Safety bounds
-        if tol < 0 or tol > 0.05:
-            return 1e6
-
-        tol_series = pd.Series(tol, index=portfolio_index.index)
-
-        sig = generate_testfol_signal_vectorized(
-            portfolio_index,
-            opt_ma,
-            tol_series
-        )
-
-        result = backtest(
-            prices,
-            sig,
-            risk_on_weights,
-            risk_off_weights,
-            FLIP_COST,
-            ma_flip_multiplier=3.0,
-            annual_drag_pct=annual_drag_pct
-        )
-
-        sharpe = result["performance"]["Sharpe"]
-
-        switches = sig.astype(int).diff().abs().sum()
-        trades_per_year = switches / (len(sig) / 252)
-
-        if sharpe <= 0 or trades_per_year <= 0:
-            return 1e6
-
-        # MINIMIZE negative Sharpe-per-trade
-        return -(sharpe / trades_per_year)
-
-    res = minimize(
-        objective,
-        x0=[0.002],               # starting guess (irrelevant to solution)
-        bounds=[(0.0, 0.05)],
-        method="L-BFGS-B"
-    )
-
-    return float(res.x[0])
 # ============================================================
 # SIG ENGINE — NOW USING CALENDAR QUARTER-ENDS (B1)
 # ============================================================
@@ -613,7 +565,7 @@ def compute_enhanced_performance(simple_returns, eq_curve, rf=0.0):
         "DD_Series": dd
     }
 
-def backtest(prices, signal, risk_on_weights, risk_off_weights, flip_cost, ma_flip_multiplier=3.0, annual_drag_pct=0.0):
+def backtest(prices, signal, risk_on_weights, risk_off_weights, annual_drag_pct=0.0):
     simple = prices.pct_change().fillna(0)
     weights = build_weight_df(prices, signal, risk_on_weights, risk_off_weights)
 
@@ -1167,6 +1119,22 @@ def main():
     risk_off_weights_list = [float(x) for x in risk_off_weights_str.split(",")]
     risk_off_weights = dict(zip(risk_off_tickers, risk_off_weights_list))
 
+    # ============================================================
+    # SAFETY: MA TICKERS ARE SIGNAL-ONLY
+    # ============================================================
+
+    if user_prefs["ma_source_type"] == "custom":
+        ma_set = set(t.strip().upper() for t in user_prefs["ma_tickers"].split(","))
+        held_set = set(risk_on_tickers + risk_off_tickers)
+
+        overlap = ma_set & held_set
+        if overlap:
+            st.error(
+                f"Invalid configuration: MA ticker(s) {overlap} "
+                "cannot be used as held assets. MA tickers are signal-only."
+            )
+            st.stop()
+    
     all_tickers = sorted(set(risk_on_tickers + risk_off_tickers))
     end_val = end if end.strip() else None
 
@@ -1203,10 +1171,13 @@ def main():
         )
 
     else:
+        # MA signal computed ONLY on Risk-On assets, NO drag
+        risk_on_prices = prices[list(risk_on_weights.keys())]
+
         portfolio_index = build_portfolio_index(
-            prices,
+            risk_on_prices,
             risk_on_weights,
-            annual_drag_pct=annual_drag_decimal
+            annual_drag_pct=0.0
         )
     
     # ============================================================
@@ -1215,27 +1186,12 @@ def main():
 
     opt_ma = compute_ma(portfolio_index, best_len, best_type)
 
-    best_tol = optimize_tolerance(
-        portfolio_index,
-        opt_ma,
-        prices,
-        risk_on_weights,
-        risk_off_weights,
-        annual_drag_pct=annual_drag_decimal
-    )
-
-    tol_series = pd.Series(best_tol, index=portfolio_index.index)
-
-    st.sidebar.write(f"**Optimal Tolerance:** {best_tol:.2%}")
-    st.write(
-        f"**MA Type:** {best_type.upper()}  —  "
-        f"**Length:** {best_len}  —  "
-        f"**Tolerance:** {best_tol:.2%}"
-    )
     if annual_drag_pct > 0:
         daily_drag_factor = (1 - annual_drag_decimal) ** (1/252)
         daily_drag_pct = (1 - daily_drag_factor) * 100
         st.write(f"**Portfolio Drag:** {annual_drag_pct:.1f}% annual (≈{daily_drag_pct:.4f}% daily)")
+
+    tol_series = pd.Series(FIXED_MA_TOLERANCE, index=portfolio_index.index)
 
     sig = generate_testfol_signal_vectorized(
         portfolio_index,
@@ -1244,8 +1200,10 @@ def main():
     )
     
     # Run backtest with fixed parameters
-    best_result = backtest(prices, sig, risk_on_weights, risk_off_weights, FLIP_COST, 
-                          ma_flip_multiplier=3.0, annual_drag_pct=annual_drag_decimal)
+    best_result = backtest(
+        prices, sig, risk_on_weights, risk_off_weights,
+        annual_drag_pct=annual_drag_decimal
+    )
     
     latest_signal = sig.iloc[-1]
     current_regime = "RISK-ON" if latest_signal else "RISK-OFF"
@@ -1581,7 +1539,7 @@ def main():
         ma_perf,
         best_result["returns"],
         ma_perf["DD_Series"],
-        best_result["flip_mask"],
+        np.zeros(len(best_result["returns"]), dtype=bool),
         trades_per_year,
     )
 

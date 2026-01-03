@@ -164,8 +164,6 @@ RISK_OFF_WEIGHTS = {
     "AGG": 1.0,
 }
 
-FLIP_COST = 0.0005
-
 # Starting weights inside the SIG engine (unchanged)
 START_RISKY = 0.6
 START_SAFE  = 0.4
@@ -312,10 +310,7 @@ def run_sig_engine(
     ma_signal,
     pure_sig_rw=None,
     pure_sig_sw=None,
-    flip_cost=FLIP_COST,
-    quarter_end_dates=None,   # <-- must be mapped_q_ends
-    quarterly_multiplier=4.0,  # NEW: 2x for SIG, 2x for Sigma (quarterly part)
-    ma_flip_multiplier=4.0     # NEW: 4x for Sigma when MA flips
+    quarter_end_dates=None   # <-- must be mapped_q_ends
 ):
 
     dates = risk_on_returns.index
@@ -326,10 +321,6 @@ def run_sig_engine(
 
     # Fast lookup
     quarter_end_set = set(quarter_end_dates)
-
-    # MA flip detection
-    sig_arr = ma_signal.astype(int)
-    flip_mask = sig_arr.diff().abs() == 1
 
     # Init values
     eq = 10000.0
@@ -353,93 +344,6 @@ def run_sig_engine(
         r_off = risk_off_returns.iloc[i]
         ma_on = bool(ma_signal.iloc[i])
         
-        # ============================================
-        # FIX: Apply MA flip costs BEFORE checking regime
-        # ============================================
-        if i > 0 and flip_mask.iloc[i]:  # Skip first day (no diff)
-            eq *= (1 - flip_cost * ma_flip_multiplier)  # Use parameter, not hardcoded
-        # ============================================
-
-        if ma_on:
-
-            # Restore pure-SIG weights after exiting RISK-OFF
-            if frozen_risky is not None:
-                w_r = pure_sig_rw.iloc[i]
-                w_s = pure_sig_sw.iloc[i]
-                risky_val = eq * w_r
-                safe_val  = eq * w_s
-                frozen_risky = None
-                frozen_safe  = None
-
-            # Apply daily returns
-            risky_val *= (1 + r_on)
-            safe_val  *= (1 + r_off)
-
-            # Rebalance ON quarter-end date (correct logic)
-            if date in quarter_end_set:
-
-                # Identify actual quarter start (previous quarter end)
-                prev_qs = [qd for qd in quarter_end_dates if qd < date]
-
-                if prev_qs:
-                    prev_q = prev_qs[-1]
-
-                    idx_prev = dates.get_loc(prev_q)
-
-                    # Risky sleeve at the start of this quarter
-                    risky_at_qstart = risky_val_series[idx_prev]
-
-                    # Quarterly growth target
-                    goal_risky = risky_at_qstart * (1 + target_quarter)
-
-                    # --- Apply SIG logic (unchanged) ---
-                    if risky_val > goal_risky:
-                        excess = risky_val - goal_risky
-                        risky_val -= excess
-                        safe_val  += excess
-                        rebalance_dates.append(date)
-
-                    elif risky_val < goal_risky:
-                        needed = goal_risky - risky_val
-                        move = min(needed, safe_val)
-                        safe_val -= move
-                        risky_val += move
-                        rebalance_dates.append(date)
-
-                    # Apply quarterly fee with multiplier
-                    eq *= (1 - flip_cost * quarterly_multiplier)
-
-            # Update equity
-            eq = risky_val + safe_val
-            risky_w = risky_val / eq
-            safe_w  = safe_val  / eq
-
-        else:
-            # Freeze values on entering RISK-OFF
-            if frozen_risky is None:
-                frozen_risky = risky_val
-                frozen_safe  = safe_val
-
-            # Only safe sleeve earns returns
-            eq *= (1 + r_off)
-            risky_w = 0.0
-            safe_w  = 1.0
-
-        # Store values
-        equity_curve.append(eq)
-        risky_w_series.append(risky_w)
-        safe_w_series.append(safe_w)
-        risky_val_series.append(risky_val)
-        safe_val_series.append(safe_val)
-
-    return (
-        pd.Series(equity_curve, index=dates),
-        pd.Series(risky_w_series, index=dates),
-        pd.Series(safe_w_series, index=dates),
-        rebalance_dates
-    )
-
-
 # ============================================================
 # BACKTEST ENGINE WITH DRAG
 # ============================================================
@@ -1295,9 +1199,8 @@ def main():
         risk_off_daily,
         quarterly_target,
         pure_sig_signal,
-        quarter_end_dates=mapped_q_ends,
-        quarterly_multiplier=2.0,  # 2x for SIG
-        ma_flip_multiplier=0.0     # No MA flips for SIG
+        quarter_end_dates=mapped_q_ends
+        
     )
 
     # Sigma (MA Filter) - 2x quarterly + 3x MA flips
@@ -1308,9 +1211,8 @@ def main():
         sig,  # <-- CRITICAL: Uses the SAME optimized signal
         pure_sig_rw=pure_sig_rw,
         pure_sig_sw=pure_sig_sw,
-        quarter_end_dates=mapped_q_ends,
-        quarterly_multiplier=2.0,  # 2x quarterly part
-        ma_flip_multiplier=3.0     # 3x when MA flips
+        quarter_end_dates=mapped_q_ends
+             
     )
     
     # ============================================================

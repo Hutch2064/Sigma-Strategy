@@ -12,6 +12,64 @@ import json
 import os
 from pathlib import Path
 
+def show_strategy_overview():
+    st.markdown("""
+## **Sigma Strategy — Implementation Guide**
+
+### **Implementation Checklist**
+- Rotate 100% of portfolio to treasury sleeve whenever the MA regime flips.
+- At each calendar quarter-end, input your portfolio value at last rebalance & today's portfolio value.
+- Execute the exact dollar adjustment recommended by the model on the rebalance date.
+
+---
+
+### **Portfolio Allocation & Implementation Notes**
+
+This system implements a dual-account portfolio framework built around  
+a Moving Average (MA) regime filter combined with a quarterly signal  
+(target-growth) rebalancing engine.
+
+The strategy is designed to:
+1. Concentrate risk during favorable regimes  
+2. Systematically de-risk during adverse regimes  
+3. Enforce disciplined quarterly capital deployment  
+4. Preserve asymmetry while maintaining long-term solvency  
+
+---
+
+### **Portfolio — Sigma Strategy**
+
+**Regime Filter**
+- Fixed MA applied to the risk-on portfolio index
+- Price ABOVE MA → **RISK-ON**
+- Price BELOW MA → **RISK-OFF**
+
+**Sig (Quarterly Target-Growth) Logic**
+- Initial allocation: **60% Risk-On / 40% Risk-Off**
+- True calendar quarter-end rebalancing only
+- Excess risk-on trimmed; deficits replenished from risk-off
+
+**Risk-Off Behavior**
+- MA flip → freeze risky sleeve
+- 100% exposure shifted to Treasuries
+- Resume last valid weights when risk-on returns
+
+**Portfolio Drag**
+- Optional annual drag for leveraged ETFs
+- Applied daily across entire portfolio
+
+Leverage Drag Estimation:  
+https://testfol.io/?s=cVJni7zRUsA
+
+---
+
+### **Important Notes**
+- Fully rules-based and non-discretionary
+- No rolling or discretionary rebalances
+- Fixed MA parameters to avoid overfitting
+- Designed for robustness and behavioral discipline
+""")
+
 # ============================================================
 # AUTHENTICATION SETUP
 # ============================================================
@@ -934,6 +992,9 @@ def main():
     
     # If we get here, user is authenticated!
     st.sidebar.title(f"Welcome {name}!")
+    
+    show_strategy_overview()
+    st.markdown("---")
     
     # Initialize portfolio preferences for this user
     if 'portfolio_prefs' not in st.session_state:
@@ -1899,76 +1960,6 @@ def main():
                         """)
     else:
         st.warning("Insufficient data for Monte Carlo simulations. Need at least 100 days of historical data.")
-
-    # ============================================================
-    # IMPLEMENTATION CHECKLIST (Displayed at Bottom)
-    # ============================================================
-    st.markdown("""
----
-
-## **Implementation Checklist**
-
-- Rotate 100% of portfolio to treasury sleeve whenever the MA regime flips.
-- At each calendar quarter-end, input your portfolio value at last rebalance & today's portfolio value.
-- Execute the exact dollar adjustment recommended by the model (increase/decrease deployed sleeve) on the rebalance date.
-
-## **Portfolio Allocation & Implementation Notes**
-
-This system implements a dual-account portfolio framework built around
-a Moving Average (MA) regime filter combined with a quarterly signal
-(target-growth) rebalancing engine.
-
-The strategy is designed to:
-1) Concentrate risk during favorable regimes,
-2) Systematically de-risk during adverse regimes,
-3) Enforce disciplined quarterly capital deployment,
-4) Preserve asymmetry while maintaining long-term solvency.
-
----
-
-### **Portfolio — Sigma Strategy**
-
-**Regime Filter**
-- A fixed moving average (MA) is applied to the risk-on portfolio index.
-- When price is ABOVE the MA → **RISK-ON** regime.
-- When price is BELOW the MA → **RISK-OFF** regime.
-
-**Sig (Quarterly Target-Growth) Logic**
-- When RISK-ON, the portfolio follows the Pure Sig rebalancing methodology:
-  - Initial allocation: **60% Risk-On / 40% Risk-Off**
-  - At each true calendar quarter-end:
-    - A target quarterly growth rate is derived from the long-run CAGR
-      of the Risk-On portfolio.
-    - If Risk-On capital exceeds the target:
-      → Excess is trimmed and moved to Risk-Off.
-    - If Risk-On capital falls short of the target:
-      → Capital is transferred from Risk-Off to Risk-On (subject to availability).
-- Rebalancing is strictly calendar-quarter based (true quarter-ends),
-  not rolling or price-dependent.
-
-**Risk-Off Behavior**
-- Upon entering a RISK-OFF regime:
-  - Risk-On capital is frozen.
-  - 100% of portfolio exposure is shifted to the Treasury sleeve.
-- Upon re-entering RISK-ON:
-  - The system resumes Pure Sig allocations using the last valid weights.
-
-**Portfolio Drag**
-- An optional annual drag can be applied to simulate costs of leveraged ETFs
-- Drag compounds daily and applies to entire portfolio returns
-
-Leverage Drag Estimation: https://testfol.io/?s=cVJni7zRUsA
-
----
-
-### **Important Notes**
-- The system is fully rules-based and non-discretionary.
-- All rebalances occur only at true calendar quarter-ends.
-- MA parameters and tolerances are fixed to avoid overfitting.
-- The objective is long-horizon robustness, asymmetry, and behavioral discipline.
-
----
-""")
 
 # ============================================================
 # LAUNCH APP

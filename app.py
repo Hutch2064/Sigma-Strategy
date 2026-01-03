@@ -107,9 +107,6 @@ class PortfolioPreferences:
             "end_date": "",  # Empty for current date
             "official_inception_date": "2025-12-22",  # ← ADD THIS LINE
             "benchmark_ticker": "QQQ",
-            "ma_source_type": "risk_on",   # "risk_on" or "custom"
-            "ma_tickers": "QQQ",
-            "ma_weights": "1.0",
         } 
     
     
@@ -164,13 +161,14 @@ RISK_OFF_WEIGHTS = {
     "AGG": 1.0,
 }
 
+FLIP_COST = 0.0005
+
 # Starting weights inside the SIG engine (unchanged)
 START_RISKY = 0.6
 START_SAFE  = 0.4
 
 # FIXED PARAMETERS
 FIXED_MA_LENGTH = 200
-FIXED_MA_TOLERANCE = 0.002
 FIXED_MA_TYPE = "SMA"  # or "ema" - you can choose which one to fix
 
 # ============================================================
@@ -299,6 +297,55 @@ def generate_testfol_signal_vectorized(price, ma, tol_series):
     
     return pd.Series(sig, index=ma.index).fillna(False)
 
+def optimize_tolerance(portfolio_index, opt_ma, prices, risk_on_weights, risk_off_weights, annual_drag_pct=0.0):
+    """
+    Selects tolerance in [0, 5%] that maximizes Sharpe / trades_per_year.
+    """
+
+    def objective(x):
+        tol = float(x[0])
+
+        # Safety bounds
+        if tol < 0 or tol > 0.05:
+            return 1e6
+
+        tol_series = pd.Series(tol, index=portfolio_index.index)
+
+        sig = generate_testfol_signal_vectorized(
+            portfolio_index,
+            opt_ma,
+            tol_series
+        )
+
+        result = backtest(
+            prices,
+            sig,
+            risk_on_weights,
+            risk_off_weights,
+            FLIP_COST,
+            ma_flip_multiplier=3.0,
+            annual_drag_pct=annual_drag_pct
+        )
+
+        sharpe = result["performance"]["Sharpe"]
+
+        switches = sig.astype(int).diff().abs().sum()
+        trades_per_year = switches / (len(sig) / 252)
+
+        if sharpe <= 0 or trades_per_year <= 0:
+            return 1e6
+
+        # MINIMIZE negative Sharpe-per-trade
+        return -(sharpe / trades_per_year)
+
+    res = minimize(
+        objective,
+        x0=[0.002],               # starting guess (irrelevant to solution)
+        bounds=[(0.0, 0.05)],
+        method="L-BFGS-B"
+    )
+
+    return float(res.x[0])
 # ============================================================
 # SIG ENGINE — NOW USING CALENDAR QUARTER-ENDS (B1)
 # ============================================================
@@ -310,67 +357,134 @@ def run_sig_engine(
     ma_signal,
     pure_sig_rw=None,
     pure_sig_sw=None,
-    quarter_end_dates=None
+    flip_cost=FLIP_COST,
+    quarter_end_dates=None,   # <-- must be mapped_q_ends
+    quarterly_multiplier=4.0,  # NEW: 2x for SIG, 2x for Sigma (quarterly part)
+    ma_flip_multiplier=4.0     # NEW: 4x for Sigma when MA flips
 ):
+
+    dates = risk_on_returns.index
+    n = len(dates)
 
     if quarter_end_dates is None:
         raise ValueError("quarter_end_dates must be supplied")
 
-    dates = risk_on_returns.index
-    quarter_end_set = set(pd.to_datetime(quarter_end_dates))
+    # Fast lookup
+    quarter_end_set = set(quarter_end_dates)
 
+    # MA flip detection
+    sig_arr = ma_signal.astype(int)
+    flip_mask = sig_arr.diff().abs() == 1
+
+    # Init values
     eq = 10000.0
     risky_val = eq * START_RISKY
     safe_val  = eq * START_SAFE
 
+    frozen_risky = None
+    frozen_safe  = None
+
     equity_curve = []
     risky_w_series = []
     safe_w_series = []
+    risky_val_series = []
+    safe_val_series = []
+    rebalance_events = 0
     rebalance_dates = []
 
-    last_q_date = None
-
-    for i, date in enumerate(dates):
-        # Daily returns
-        risky_val *= (1 + risk_on_returns.iloc[i])
-        safe_val  *= (1 + risk_off_returns.iloc[i])
-
-        # MA regime: force full risk-off
-        if not ma_signal.iloc[i]:
-            risky_val = 0.0
-            safe_val = risky_val + safe_val
-
-        # Quarterly rebalance
-        if date in quarter_end_set:
-            total = risky_val + safe_val
-
-            if ma_signal.iloc[i]:
-                # Resume SIG weights
-                if pure_sig_rw is not None and pure_sig_sw is not None:
-                    risky_w = pure_sig_rw.loc[last_q_date] if last_q_date in pure_sig_rw.index else START_RISKY
-                    safe_w  = pure_sig_sw.loc[last_q_date] if last_q_date in pure_sig_sw.index else START_SAFE
-                else:
-                    risky_w, safe_w = START_RISKY, START_SAFE
-            else:
-                risky_w, safe_w = 0.0, 1.0
-
-            risky_val = total * risky_w
-            safe_val  = total * safe_w
-            rebalance_dates.append(date)
-            last_q_date = date
-
-        total_eq = risky_val + safe_val
-
-        equity_curve.append(total_eq)
-        risky_w_series.append(risky_val / total_eq if total_eq > 0 else 0)
-        safe_w_series.append(safe_val / total_eq if total_eq > 0 else 0)
-
-    eq_series = pd.Series(equity_curve, index=dates)
-    rw_series = pd.Series(risky_w_series, index=dates)
-    sw_series = pd.Series(safe_w_series, index=dates)
-
-    return eq_series, rw_series, sw_series, rebalance_dates
+    for i in range(n):
+        date = dates[i]
+        r_on = risk_on_returns.iloc[i]
+        r_off = risk_off_returns.iloc[i]
+        ma_on = bool(ma_signal.iloc[i])
         
+        # ============================================
+        # FIX: Apply MA flip costs BEFORE checking regime
+        # ============================================
+        if i > 0 and flip_mask.iloc[i]:  # Skip first day (no diff)
+            eq *= (1 - flip_cost * ma_flip_multiplier)  # Use parameter, not hardcoded
+        # ============================================
+
+        if ma_on:
+
+            # Restore pure-SIG weights after exiting RISK-OFF
+            if frozen_risky is not None:
+                w_r = pure_sig_rw.iloc[i]
+                w_s = pure_sig_sw.iloc[i]
+                risky_val = eq * w_r
+                safe_val  = eq * w_s
+                frozen_risky = None
+                frozen_safe  = None
+
+            # Apply daily returns
+            risky_val *= (1 + r_on)
+            safe_val  *= (1 + r_off)
+
+            # Rebalance ON quarter-end date (correct logic)
+            if date in quarter_end_set:
+
+                # Identify actual quarter start (previous quarter end)
+                prev_qs = [qd for qd in quarter_end_dates if qd < date]
+
+                if prev_qs:
+                    prev_q = prev_qs[-1]
+
+                    idx_prev = dates.get_loc(prev_q)
+
+                    # Risky sleeve at the start of this quarter
+                    risky_at_qstart = risky_val_series[idx_prev]
+
+                    # Quarterly growth target
+                    goal_risky = risky_at_qstart * (1 + target_quarter)
+
+                    # --- Apply SIG logic (unchanged) ---
+                    if risky_val > goal_risky:
+                        excess = risky_val - goal_risky
+                        risky_val -= excess
+                        safe_val  += excess
+                        rebalance_dates.append(date)
+
+                    elif risky_val < goal_risky:
+                        needed = goal_risky - risky_val
+                        move = min(needed, safe_val)
+                        safe_val -= move
+                        risky_val += move
+                        rebalance_dates.append(date)
+
+                    # Apply quarterly fee with multiplier
+                    eq *= (1 - flip_cost * quarterly_multiplier)
+
+            # Update equity
+            eq = risky_val + safe_val
+            risky_w = risky_val / eq
+            safe_w  = safe_val  / eq
+
+        else:
+            # Freeze values on entering RISK-OFF
+            if frozen_risky is None:
+                frozen_risky = risky_val
+                frozen_safe  = safe_val
+
+            # Only safe sleeve earns returns
+            eq *= (1 + r_off)
+            risky_w = 0.0
+            safe_w  = 1.0
+
+        # Store values
+        equity_curve.append(eq)
+        risky_w_series.append(risky_w)
+        safe_w_series.append(safe_w)
+        risky_val_series.append(risky_val)
+        safe_val_series.append(safe_val)
+
+    return (
+        pd.Series(equity_curve, index=dates),
+        pd.Series(risky_w_series, index=dates),
+        pd.Series(safe_w_series, index=dates),
+        rebalance_dates
+    )
+
+
 # ============================================================
 # BACKTEST ENGINE WITH DRAG
 # ============================================================
@@ -496,19 +610,23 @@ def compute_enhanced_performance(simple_returns, eq_curve, rf=0.0):
         "DD_Series": dd
     }
 
-def backtest(prices, signal, risk_on_weights, risk_off_weights, annual_drag_pct=0.0):
+def backtest(prices, signal, risk_on_weights, risk_off_weights, flip_cost, ma_flip_multiplier=3.0, annual_drag_pct=0.0):
     simple = prices.pct_change().fillna(0)
     weights = build_weight_df(prices, signal, risk_on_weights, risk_off_weights)
 
     strategy_simple = (weights.shift(1).fillna(0) * simple).sum(axis=1)
-    
+    sig_arr = signal.astype(int)
+    flip_mask = sig_arr.diff().abs() == 1
+
+    # MA flip costs with multiplier
+    flip_costs = np.where(flip_mask, -flip_cost * ma_flip_multiplier, 0.0)
     
     # Apply portfolio drag (if any) to strategy returns
     if annual_drag_pct > 0:
         daily_drag_factor = (1 - annual_drag_pct) ** (1/252)
         strategy_simple = (1 + strategy_simple) * daily_drag_factor - 1
     
-    strat_adj = strategy_simple
+    strat_adj = strategy_simple + flip_costs
 
     eq = (1 + strat_adj).cumprod()
 
@@ -518,6 +636,7 @@ def backtest(prices, signal, risk_on_weights, risk_off_weights, annual_drag_pct=
         "signal": signal,
         "weights": weights,
         "performance": compute_enhanced_performance(strat_adj, eq),  # Changed to enhanced
+        "flip_mask": flip_mask,
     }
     
 def compute_total_return(eq_series, start_date):
@@ -924,34 +1043,6 @@ def main():
         key="risk_off_weights_input"
     )
     
-    # ============================================================
-    # 200-DAY MA EVALUATION SOURCE
-    # ============================================================
-
-    st.sidebar.header("200-Day MA Evaluation")
-
-    ma_source_choice = st.sidebar.selectbox(
-        "MA Source",
-        ["Use Risk-On Allocation", "Use Custom Ticker / Portfolio"],
-        index=0 if user_prefs["ma_source_type"] == "risk_on" else 1,
-        help="Controls what asset(s) define the MA regime (NOT what you hold)."
-    )
-
-    if ma_source_choice == "Use Custom Ticker / Portfolio":
-        ma_tickers_str = st.sidebar.text_input(
-            "MA Tickers",
-            user_prefs["ma_tickers"],
-            help="Example: QQQ or QQQ,SPY"
-        )
-        ma_weights_str = st.sidebar.text_input(
-            "MA Weights",
-            user_prefs["ma_weights"],
-            help="Weights must sum to 1.0"
-        )
-    else:
-        ma_tickers_str = None
-        ma_weights_str = None
-    
     # PORTFOLIO DRAG INPUT with saved preference
     st.sidebar.header("Portfolio Drag")
     annual_drag_pct = st.sidebar.number_input(
@@ -1014,9 +1105,6 @@ def main():
                 "end_date": end,
                 "official_inception_date": official_inception_date,
                 "benchmark_ticker": benchmark_ticker,
-                "ma_source_type": "custom" if ma_source_choice == "Use Custom Ticker / Portfolio" else "risk_on",
-                "ma_tickers": ma_tickers_str if ma_tickers_str else user_prefs["ma_tickers"],
-                "ma_weights": ma_weights_str if ma_weights_str else user_prefs["ma_weights"],
              }
             
             # Save to user's file
@@ -1050,22 +1138,6 @@ def main():
     risk_off_weights_list = [float(x) for x in risk_off_weights_str.split(",")]
     risk_off_weights = dict(zip(risk_off_tickers, risk_off_weights_list))
 
-    # ============================================================
-    # SAFETY: MA TICKERS ARE SIGNAL-ONLY
-    # ============================================================
-
-    if user_prefs["ma_source_type"] == "custom":
-        ma_set = set(t.strip().upper() for t in user_prefs["ma_tickers"].split(","))
-        held_set = set(risk_on_tickers + risk_off_tickers)
-
-        overlap = ma_set & held_set
-        if overlap:
-            st.error(
-                f"Invalid configuration: MA ticker(s) {overlap} "
-                "cannot be used as held assets. MA tickers are signal-only."
-            )
-            st.stop()
-    
     all_tickers = sorted(set(risk_on_tickers + risk_off_tickers))
     end_val = end if end.strip() else None
 
@@ -1084,32 +1156,7 @@ def main():
     
     
     # Generate signal with fixed parameters
-    # ============================================================
-    # MA EVALUATION INDEX (NEW LOGIC)
-    # ============================================================
-
-    if user_prefs["ma_source_type"] == "custom":
-        ma_tickers = [t.strip().upper() for t in user_prefs["ma_tickers"].split(",")]
-        ma_weights_list = [float(x) for x in user_prefs["ma_weights"].split(",")]
-        ma_weights = dict(zip(ma_tickers, ma_weights_list))
-
-        ma_prices = load_price_data(ma_tickers, start, end_val)
-
-        portfolio_index = build_portfolio_index(
-            ma_prices,
-            ma_weights,
-            annual_drag_pct=0.0   # IMPORTANT: no leverage drag on regime signal
-        )
-
-    else:
-        # MA signal computed ONLY on Risk-On assets, NO drag
-        risk_on_prices = prices[list(risk_on_weights.keys())]
-
-        portfolio_index = build_portfolio_index(
-            risk_on_prices,
-            risk_on_weights,
-            annual_drag_pct=0.0
-        )
+    portfolio_index = build_portfolio_index(prices, risk_on_weights, annual_drag_pct=annual_drag_decimal)
     
     # ============================================================
     # OPTIMAL TOLERANCE (Sharpe per trade)
@@ -1117,12 +1164,27 @@ def main():
 
     opt_ma = compute_ma(portfolio_index, best_len, best_type)
 
+    best_tol = optimize_tolerance(
+        portfolio_index,
+        opt_ma,
+        prices,
+        risk_on_weights,
+        risk_off_weights,
+        annual_drag_pct=annual_drag_decimal
+    )
+
+    tol_series = pd.Series(best_tol, index=portfolio_index.index)
+
+    st.sidebar.write(f"**Optimal Tolerance:** {best_tol:.2%}")
+    st.write(
+        f"**MA Type:** {best_type.upper()}  —  "
+        f"**Length:** {best_len}  —  "
+        f"**Tolerance:** {best_tol:.2%}"
+    )
     if annual_drag_pct > 0:
         daily_drag_factor = (1 - annual_drag_decimal) ** (1/252)
         daily_drag_pct = (1 - daily_drag_factor) * 100
         st.write(f"**Portfolio Drag:** {annual_drag_pct:.1f}% annual (≈{daily_drag_pct:.4f}% daily)")
-
-    tol_series = pd.Series(FIXED_MA_TOLERANCE, index=portfolio_index.index)
 
     sig = generate_testfol_signal_vectorized(
         portfolio_index,
@@ -1131,10 +1193,8 @@ def main():
     )
     
     # Run backtest with fixed parameters
-    best_result = backtest(
-        prices, sig, risk_on_weights, risk_off_weights,
-        annual_drag_pct=annual_drag_decimal
-    )
+    best_result = backtest(prices, sig, risk_on_weights, risk_off_weights, FLIP_COST, 
+                          ma_flip_multiplier=3.0, annual_drag_pct=annual_drag_decimal)
     
     latest_signal = sig.iloc[-1]
     current_regime = "RISK-ON" if latest_signal else "RISK-OFF"
@@ -1226,8 +1286,9 @@ def main():
         risk_off_daily,
         quarterly_target,
         pure_sig_signal,
-        quarter_end_dates=mapped_q_ends
-        
+        quarter_end_dates=mapped_q_ends,
+        quarterly_multiplier=2.0,  # 2x for SIG
+        ma_flip_multiplier=0.0     # No MA flips for SIG
     )
 
     # Sigma (MA Filter) - 2x quarterly + 3x MA flips
@@ -1238,8 +1299,9 @@ def main():
         sig,  # <-- CRITICAL: Uses the SAME optimized signal
         pure_sig_rw=pure_sig_rw,
         pure_sig_sw=pure_sig_sw,
-        quarter_end_dates=mapped_q_ends
-             
+        quarter_end_dates=mapped_q_ends,
+        quarterly_multiplier=2.0,  # 2x quarterly part
+        ma_flip_multiplier=3.0     # 3x when MA flips
     )
     
     # ============================================================
@@ -1468,7 +1530,7 @@ def main():
         ma_perf,
         best_result["returns"],
         ma_perf["DD_Series"],
-        np.zeros(len(best_result["returns"]), dtype=bool),
+        best_result["flip_mask"],
         trades_per_year,
     )
 
@@ -1611,8 +1673,8 @@ def main():
         P = float(portfolio_index.loc[latest_date])
         MA = float(opt_ma.loc[latest_date])
 
-        upper = MA * (1 + FIXED_MA_TOLERANCE)
-        lower = MA * (1 - FIXED_MA_TOLERANCE)
+        upper = MA * (1 + best_tol)
+        lower = MA * (1 - best_tol)
 
         if latest_signal:
             delta = (P - lower) / P

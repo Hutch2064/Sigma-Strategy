@@ -27,7 +27,7 @@ Quarterly growth rate derived from the historical CAGR of the user selected Risk
 
 At each quarter end:
 - If the Risk On allocation returns **> QTGR**, excess amount ($) over the QTGR is moved to the Risk Off allocation.
-- If Risk on allocation returns **< QTGR**, then the deficit amount ($) is replenished from the Risk Off allocation to fill the gap between the QTGR and the actual Risk On allocation returns.
+- If the Risk On allocation returns **< QTGR**, then the deficit amount ($) is replenished from the Risk Off allocation to fill the gap between the QTGR and the actual Risk On allocation returns.
 
 ---
 

@@ -43,7 +43,7 @@ A “Risk Off Regime” = 200 Day SMA > Risk On Allocation Index.
 
 ### **Sigma Strategy**
 
-- If the 200 Day SMA < Risk On Allocation Index, then the model rus the SIG System as instructed above.
+- If the 200 Day SMA < Risk On Allocation Index, then the model runs the SIG System as instructed above.
 - If the 200 Day SMA > Risk On Allocation Index, then the model allocates all portfolio capital to the Risk Off Allocation.
 - When model flips from “Risk Off” to “Risk On”, the model refers to the Allocation Tables and resumes the current SIG System weights.
 """)

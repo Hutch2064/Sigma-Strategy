@@ -1215,7 +1215,7 @@ def main():
             prices,
             risk_on_weights,
             annual_drag_pct=annual_drag_decimal
-        q)
+        )
     
     # ============================================================
     # OPTIMAL TOLERANCE (Sharpe per trade)

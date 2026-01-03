@@ -622,14 +622,17 @@ def backtest(prices, signal, risk_on_weights, risk_off_weights, flip_cost, ma_fl
     flip_mask = sig_arr.diff().abs() == 1
 
     # MA flip costs with multiplier
-    flip_costs = np.where(flip_mask, -flip_cost * ma_flip_multiplier, 0.0)
+    flip_costs = pd.Series(
+        np.where(flip_mask, -flip_cost * ma_flip_multiplier, 0.0),
+        index=strategy_simple.index
+    )
     
     # Apply portfolio drag (if any) to strategy returns
     if annual_drag_pct > 0:
         daily_drag_factor = (1 - annual_drag_pct) ** (1/252)
         strategy_simple = (1 + strategy_simple) * daily_drag_factor - 1
     
-    strat_adj = strategy_simple + flip_costs
+    strat_adj = strategy_simple.add(flip_costs, fill_value=0.0)
 
     eq = (1 + strat_adj).cumprod()
 
@@ -1212,7 +1215,7 @@ def main():
             prices,
             risk_on_weights,
             annual_drag_pct=annual_drag_decimal
-        )
+        q)
     
     # ============================================================
     # OPTIMAL TOLERANCE (Sharpe per trade)

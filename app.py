@@ -1039,7 +1039,7 @@ def main():
         help="Ticker to compare your strategy against (e.g., QQQ, SPY, VTI)"
     )
 
-    st.sidebar.header("Risk On Portfolio")
+    st.sidebar.header("Risk On Allocation")
     # Risk On tickers with saved preference
     risk_on_tickers_str = st.sidebar.text_input(
         "Tickers", 
@@ -1052,7 +1052,7 @@ def main():
         key="risk_on_weights_input"
     )
 
-    st.sidebar.header("Risk Off Portfolio")
+    st.sidebar.header("Risk Off Allocation")
     # Risk Off tickers with saved preference
     risk_off_tickers_str = st.sidebar.text_input(
         "Tickers", 

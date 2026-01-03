@@ -620,6 +620,12 @@ def compute_enhanced_performance(simple_returns, eq_curve, rf=0.0):
     }
 
 def backtest(prices, signal, risk_on_weights, risk_off_weights, flip_cost, ma_flip_multiplier=3.0, annual_drag_pct=0.0):
+    
+    # ============================================================
+    # FORCE SIGNAL ALIGNMENT TO PRICE INDEX (CRITICAL)
+    # ============================================================
+    signal = signal.reindex(prices.index).ffill().fillna(False)
+    
     simple = prices.pct_change().fillna(0)
     weights = build_weight_df(prices, signal, risk_on_weights, risk_off_weights)
 

@@ -14,60 +14,40 @@ from pathlib import Path
 
 def show_strategy_overview():
     st.markdown("""
-## **Sigma Strategy — Implementation Guide**
+## **Sigma Strategy Overview**
 
-### **Implementation Checklist**
-- Rotate 100% of portfolio to treasury sleeve whenever the MA regime flips.
-- At each calendar quarter-end, input your portfolio value at last rebalance & today's portfolio value.
-- Execute the exact dollar adjustment recommended by the model on the rebalance date.
+This strategy aims to systematically combine the principles of the Sig strategy with the 200 Day Simple Moving Average strategy.
 
 ---
 
-### **Portfolio Allocation & Implementation Notes**
+### **The Sig strategy (SIG):**
 
-This system implements a dual-account portfolio framework built around  
-a Moving Average (MA) regime filter combined with a quarterly signal  
-(target-growth) rebalancing engine.
+**Quarterly Target Growth Rate (QTGR):**  
+Quarterly growth rate derived from the historical CAGR of the user selected Risk On allocation (e.g., 9sig = 9% QTGR for TQQQ).
 
-The strategy is designed to:
-1. Concentrate risk during favorable regimes  
-2. Systematically de-risk during adverse regimes  
-3. Enforce disciplined quarterly capital deployment  
-4. Preserve asymmetry while maintaining long-term solvency  
+At each quarter end:
+- If the Risk On allocation returns **> QTGR**, excess amount ($) over the QTGR is moved to the Risk Off allocation.
+- If Risk on allocation returns **< QTGR**, then the deficit amount ($) is replenished from the Risk Off allocation to fill the gap between the QTGR and the actual Risk On allocation returns.
 
 ---
 
-### **Portfolio — Sigma Strategy**
+### **The 200 Day Simple Moving Average Strategy (SMA or MA):**
 
-**Regime Filter**
-- Fixed MA applied to the risk-on portfolio index
-- Price ABOVE MA → **RISK-ON**
-- Price BELOW MA → **RISK-OFF**
+A 200 Day sma is constructed using a simulated index of the user selected Risk On allocation.
 
-**Sig (Quarterly Target-Growth) Logic**
-- Initial allocation: **60% Risk-On / 40% Risk-Off**
-- True calendar quarter-end rebalancing only
-- Excess risk-on trimmed; deficits replenished from risk-off
+- If the 200 Day sma < Risk On Allocation Index, then buy & hold the Risk On Allocation.
+- If the 200 Day sma > Risk On Allocation Index, then sell & hold the Risk Off Allocation.
 
-**Risk-Off Behavior**
-- MA flip → freeze risky sleeve
-- 100% exposure shifted to Treasuries
-- Resume last valid weights when risk-on returns
-
-**Portfolio Drag**
-- Optional annual drag for leveraged ETFs
-- Applied daily across entire portfolio
-
-Leverage Drag Estimation:  
-https://testfol.io/?s=cVJni7zRUsA
+A “Risk On Regime” = 200 Day sma < Risk On Allocation Index.  
+A “Risk Off Regime” = 200 Day sma > Risk On Allocation Index.
 
 ---
 
-### **Important Notes**
-- Fully rules-based and non-discretionary
-- No rolling or discretionary rebalances
-- Fixed MA parameters to avoid overfitting
-- Designed for robustness and behavioral discipline
+### **Sigma Strategy**
+
+- If the 200 Day sma < Risk On Allocation Index, then run the Sig strategy as instructed above.
+- If the 200 Day sma > Risk On Allocation Index, then allocate all capital to the Risk Off Allocation.
+- When model flips from “Risk Off” to “Risk On”, refer to the Allocation Tables and resume Sig strategy weights.
 """)
 
 # ============================================================

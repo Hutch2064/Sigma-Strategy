@@ -31,21 +31,21 @@ Quarterly Growth Target (QGT): Quarterly growth rate derived from the historical
 
 ### **The 200 Day Simple Moving Average Strategy (SMA or MA):**
 
-A 200 Day sma is constructed using a simulated index of the user selected Risk On allocation.
+A 200 Day SMA is constructed using a simulated index of the user selected Risk On allocation.
 
-- If the 200 Day sma < Risk On Allocation Index, then buy & hold the Risk On Allocation.
-- If the 200 Day sma > Risk On Allocation Index, then sell & hold the Risk Off Allocation.
+- If the 200 Day SMA < Risk On Allocation Index, then buy & hold the Risk On Allocation.
+- If the 200 Day SMA > Risk On Allocation Index, then sell & hold the Risk Off Allocation.
 
-A “Risk On Regime” = 200 Day sma < Risk On Allocation Index.  
-A “Risk Off Regime” = 200 Day sma > Risk On Allocation Index.
+A “Risk On Regime” = 200 Day SMA < Risk On Allocation Index.  
+A “Risk Off Regime” = 200 Day SMA > Risk On Allocation Index.
 
 ---
 
 ### **Sigma Strategy**
 
-- If the 200 Day sma < Risk On Allocation Index, then run the SIG System as instructed above.
-- If the 200 Day sma > Risk On Allocation Index, then allocate all capital to the Risk Off Allocation.
-- When model flips from “Risk Off” to “Risk On”, refer to the Allocation Tables and resume current SIG System weights.
+- If the 200 Day SMA < Risk On Allocation Index, then the model rus the SIG System as instructed above.
+- If the 200 Day SMA > Risk On Allocation Index, then the model allocates all portfolio capital to the Risk Off Allocation.
+- When model flips from “Risk Off” to “Risk On”, the model refers to the Allocation Tables and resumes the current SIG System weights.
 """)
 
 # ============================================================
@@ -169,7 +169,7 @@ START_SAFE  = 0.4
 
 # FIXED PARAMETERS
 FIXED_MA_LENGTH = 200
-FIXED_MA_TYPE = "sma"  # or "ema" - you can choose which one to fix
+FIXED_MA_TYPE = "SMA"  # or "ema" - you can choose which one to fix
 
 # ============================================================
 # DATA LOADING

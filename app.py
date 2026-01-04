@@ -1065,14 +1065,14 @@ def main():
     		tolerance_decimal = 0.0
     
     	# MINIMUM HOLDING PERIOD
-    	min_holding_days = st.sidebar.number_input(
-        	"Minimum Holding Period (days)",
-        	min_value=0,
-        	max_value=365,
-        	value=int(user_prefs["min_holding_days"]),
-        	step=1,
-        	help="Minimum days to hold after a regime change. Prevents excessive trading."
-    	)
+    		min_holding_days = st.sidebar.number_input(
+        		"Minimum Holding Period (days)",
+        		min_value=0,
+        		max_value=365,
+        		value=int(user_prefs["min_holding_days"]),
+        		step=1,
+        		help="Minimum days to hold after a regime change. Prevents excessive trading."
+    		)
 
     	st.sidebar.header("Quarterly Portfolio Values")
     # Portfolio values with saved preferences - only ONE portfolio now

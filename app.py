@@ -42,8 +42,12 @@ authenticator = stauth.Authenticate(
     config['cookie']['expiry_days']
 )
 
-# Show login
-name, auth_status, username = authenticator.login('Login', 'main')
+# Show login - using simplified approach
+try:
+    name, auth_status, username = authenticator.login('Login', 'main')
+except:
+    # Try the simpler approach for newer versions
+    name, auth_status, username = authenticator.login()
 
 if auth_status == False:
     st.error('❌ Wrong username/password')

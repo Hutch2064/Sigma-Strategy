@@ -10,6 +10,7 @@ from yaml.loader import SafeLoader
 import streamlit_authenticator as stauth
 import json
 import os
+import bcrypt
 
 # ============================================================
 # LOAD AUTH CONFIG (REQUIRED FOR AUTHENTICATOR)
@@ -31,6 +32,24 @@ if not os.path.exists("config.yaml"):
 
 with open("config.yaml") as file:
     config = yaml.load(file, Loader=SafeLoader)
+    
+# ============================================================
+# OPEN SIGNUP HELPERS (OPTION 3)
+# ============================================================
+
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+def username_exists(username: str) -> bool:
+    return username in config["credentials"]["usernames"]
+
+def create_user(username: str, name: str, password: str):
+    config["credentials"]["usernames"][username] = {
+        "name": name,
+        "password": hash_password(password),
+    }
+    with open("config.yaml", "w") as f:
+        yaml.dump(config, f)
 
 # ============================================================
 # USER DATA PERSISTENCE (DISK-BACKED)
@@ -73,19 +92,47 @@ def save_user_prefs(username, prefs):
 # ============================================================
 
 authenticator = stauth.Authenticate(
-    config['credentials'],
-    config['cookie']['name'],
-    config['cookie']['key'],
-    config['cookie']['expiry_days']
+    config["credentials"],
+    config["cookie"]["name"],
+    config["cookie"]["key"],
+    config["cookie"]["expiry_days"],
 )
 
-name, authentication_status, username = authenticator.login("Login", "main")
+login_tab, signup_tab = st.tabs(["Login", "Create Account"])
 
-if authentication_status is False:
-    st.error("Invalid username or password")
-    st.stop()
-elif authentication_status is None:
-    st.stop()
+with login_tab:
+    name, authentication_status, username = authenticator.login("Login", "main")
+
+    if authentication_status is False:
+        st.error("Invalid username or password")
+        st.stop()
+    elif authentication_status is None:
+        st.stop()
+
+with signup_tab:
+    st.subheader("Create Account")
+
+    new_username = st.text_input("Username")
+    new_name = st.text_input("Full Name")
+    new_password = st.text_input("Password", type="password")
+    new_password_confirm = st.text_input("Confirm Password", type="password")
+
+    if st.button("Create Account"):
+        if not new_username or not new_name or not new_password:
+            st.error("All fields are required")
+            st.stop()
+
+        if new_password != new_password_confirm:
+            st.error("Passwords do not match")
+            st.stop()
+
+        if username_exists(new_username):
+            st.error("Username already exists")
+            st.stop()
+
+        create_user(new_username, new_name, new_password)
+        st.success("Account created successfully. Please log in.")
+        st.rerun()
 
 st.session_state.username = username
 st.session_state.name = name

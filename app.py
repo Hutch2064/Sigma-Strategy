@@ -1465,26 +1465,17 @@ def main():
     def rebalance_text(gap, next_q, days_to_next_q):
         date_str = next_q.strftime("%m/%d/%Y")
         days_str = f"{days_to_next_q} days"
+        dollar_amount = f"${abs(gap):,.2f}"
 
         if gap > 0:
-            return (
-                f"<strong>Sell ${gap:,.2f}</strong> of Risk Off Assets "
-                f"and <strong>Buy ${gap:,.2f}</strong> of Risk On Assets "
-                f"on <strong>{date_str}</strong> ({days_str})"
-            )
+            return f"<strong>Sell {dollar_amount}</strong> of Risk Off Assets and <strong>Buy {dollar_amount}</strong> of Risk On Assets on <strong>{date_str}</strong> ({days_str})"
         elif gap < 0:
-            gap = abs(gap)
-            return (
-                f"<strong>Sell ${gap:,.2f}</strong> of Risk On Assets "
-                f"and <strong>Buy ${gap:,.2f}</strong> of Risk Off Assets "
-                f"on <strong>{date_str}</strong> ({days_str})"
-            )
+            return f"<strong>Sell {dollar_amount}</strong> of Risk On Assets and <strong>Buy {dollar_amount}</strong> of Risk Off Assets on <strong>{date_str}</strong> ({days_str})"
         else:
             return f"No rebalance needed until <strong>{date_str}</strong> ({days_str})"
 
-    # Then in your display code:
+    # Then display it
     st.markdown("### Rebalance Recommendations")
-
     st.markdown(
         f"<strong>Portfolio:</strong> {rebalance_text(prog_1['Gap ($)'], next_q_end, days_to_next_q)}",
         unsafe_allow_html=True

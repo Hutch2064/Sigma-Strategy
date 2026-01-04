@@ -1552,7 +1552,7 @@ def main():
     )
 
     # ENHANCED STAT TABLE WITH NEW METRICS
-    st.subheader("MA vs Buy & Hold vs Sigma vs SIG")
+    st.subheader("Backtest: 200 Day SMA vs Buy & Hold vs Sigma vs SIG")
     rows = [
         ("CAGR", "CAGR"),
         ("Volatility", "Volatility"),

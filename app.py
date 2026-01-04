@@ -12,6 +12,27 @@ import json
 import os
 
 # ============================================================
+# LOAD AUTH CONFIG (REQUIRED FOR AUTHENTICATOR)
+# ============================================================
+
+if not os.path.exists("config.yaml"):
+    with open("config.yaml", "w") as f:
+        yaml.dump(
+            {
+                "credentials": {"usernames": {}},
+                "cookie": {
+                    "name": "portfolio_app",
+                    "key": "temporary-key-change-later-123",
+                    "expiry_days": 30,
+                },
+            },
+            f,
+        )
+
+with open("config.yaml") as file:
+    config = yaml.load(file, Loader=SafeLoader)
+
+# ============================================================
 # USER DATA PERSISTENCE (DISK-BACKED)
 # ============================================================
 
@@ -704,9 +725,8 @@ def main():
     
     # Logout button
     if st.sidebar.button("Logout"):
-        st.session_state.authenticated = False
-        st.session_state.username = None
-        st.session_state.name = None
+        authenticator.logout("Logout", "sidebar")
+        st.session_state.clear()
         st.rerun()
     
     show_strategy_overview()

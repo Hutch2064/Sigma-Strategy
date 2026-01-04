@@ -856,7 +856,9 @@ def main():
     # User is authenticated at this point
     st.sidebar.title(f"Welcome {name}!")
     
-    authenticator.logout("Logout", "sidebar")
+    if st.session_state.get("authentication_status"):
+        authenticator.logout("Logout", "sidebar")
+
     
     show_strategy_overview()
     st.markdown("---")

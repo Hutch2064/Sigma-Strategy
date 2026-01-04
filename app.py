@@ -17,7 +17,7 @@ import os
 
 # Load or create config
 if not os.path.exists('config.yaml'):
-    # Create minimal config as per IMG_8821.png
+    # Create minimal config
     with open('config.yaml', 'w') as f:
         yaml.dump({
             "credentials": {"usernames": {}},
@@ -28,7 +28,13 @@ if not os.path.exists('config.yaml'):
 with open('config.yaml') as file:
     config = yaml.load(file, Loader=SafeLoader)
 
-# Create authenticator
+# Ensure credentials structure exists
+if 'credentials' not in config:
+    config['credentials'] = {'usernames': {}}
+if 'usernames' not in config['credentials']:
+    config['credentials']['usernames'] = {}
+
+# Create authenticator (UPDATED - no preauthorized parameter)
 authenticator = stauth.Authenticate(
     config['credentials'],
     config['cookie']['name'],
@@ -61,6 +67,11 @@ if auth_status == None:
                 st.error("Username taken")
             else:
                 # Add user
+                if 'credentials' not in config:
+                    config['credentials'] = {'usernames': {}}
+                if 'usernames' not in config['credentials']:
+                    config['credentials']['usernames'] = {}
+                
                 config['credentials']['usernames'][new_user] = {
                     'email': f"{new_user}@example.com",
                     'name': new_name,
@@ -69,8 +80,6 @@ if auth_status == None:
                 # Save
                 with open('config.yaml', 'w') as f:
                     yaml.dump(config, f)
-                st.success("✅ Account created! Please login.")
-                st.rerun()
     st.stop()
 
 # ============================================================

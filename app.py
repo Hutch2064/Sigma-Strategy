@@ -1462,24 +1462,22 @@ def main():
     prog_df.loc["Gap (%)"] = prog_df.loc["Gap (%)"].apply(lambda x: f"{x:.2%}")
     st.dataframe(prog_df)
 
-    def rebalance_text(gap, next_q, days_to_next_q):
-        date_str = next_q.strftime("%m/%d/%Y")
-        days_str = f"{days_to_next_q} days"
-        dollar_amount = f"${abs(gap):,.2f}"
-
-        if gap > 0:
-            return f"<strong>Sell {dollar_amount}</strong> of Risk Off Assets and <strong>Buy {dollar_amount}</strong> of Risk On Assets on <strong>{date_str}</strong> ({days_str})"
-        elif gap < 0:
-            return f"<strong>Sell {dollar_amount}</strong> of Risk On Assets and <strong>Buy {dollar_amount}</strong> of Risk Off Assets on <strong>{date_str}</strong> ({days_str})"
-        else:
-            return f"No rebalance needed until <strong>{date_str}</strong> ({days_str})"
-
-    # Then display it
     st.markdown("### Rebalance Recommendations")
-    st.markdown(
-        f"<strong>Portfolio:</strong> {rebalance_text(prog_1['Gap ($)'], next_q_end, days_to_next_q)}",
-        unsafe_allow_html=True
-    )
+
+    gap = prog_1['Gap ($)']
+    date_str = next_q_end.strftime("%m/%d/%Y")
+    days_str = f"{days_to_next_q} days"
+    dollar_amount = f"${abs(gap):,.2f}"
+
+    if gap > 0:
+        # Use Markdown bold syntax **text** instead of HTML
+        message = f"**Portfolio:** **Sell {dollar_amount}** of Risk Off Assets and **Buy {dollar_amount}** of Risk On Assets on **{date_str}** ({days_str})"
+    elif gap < 0:
+        message = f"**Portfolio:** **Sell {dollar_amount}** of Risk On Assets and **Buy {dollar_amount}** of Risk Off Assets on **{date_str}** ({days_str})"
+    else:
+        message = f"**Portfolio:** No rebalance needed until **{date_str}** ({days_str})"
+
+    st.markdown(message)
 
     # ENHANCED ADVANCED METRICS
     def time_in_drawdown(dd): return (dd < 0).mean() if len(dd) > 0 else 0

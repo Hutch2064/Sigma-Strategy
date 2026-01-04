@@ -12,7 +12,7 @@ import json
 import os
 
 # ============================================================
-# SIMPLE AUTHENTICATION (UPDATED PER SCREENSHOTS)
+# SIMPLE AUTHENTICATION - COMPATIBLE VERSION
 # ============================================================
 
 # Load or create config
@@ -34,7 +34,7 @@ if 'credentials' not in config:
 if 'usernames' not in config['credentials']:
     config['credentials']['usernames'] = {}
 
-# Create authenticator (UPDATED - no preauthorized parameter)
+# Create authenticator
 authenticator = stauth.Authenticate(
     config['credentials'],
     config['cookie']['name'],
@@ -42,18 +42,73 @@ authenticator = stauth.Authenticate(
     config['cookie']['expiry_days']
 )
 
-# Show login - using simplified approach
+# Show login - handle different API versions
 try:
-    name, auth_status, username = authenticator.login('Login', 'main')
-except:
-    # Try the simpler approach for newer versions
-    name, auth_status, username = authenticator.login()
+    # Try newest API (v0.2.0+)
+    name, auth_status, username = authenticator.login(location='main')
+except TypeError:
+    try:
+        # Try older API
+        name, auth_status, username = authenticator.login('Login', 'main')
+    except:
+        # Manual fallback
+        st.header("Login")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("Login")
+            login_username = st.text_input("Username", key="login_user")
+            login_password = st.text_input("Password", type="password", key="login_pass")
+            
+            if st.button("Login"):
+                if login_username in config['credentials']['usernames']:
+                    hashed_password = config['credentials']['usernames'][login_username]['password']
+                    if stauth.Hasher([login_password]).verify(hashed_password):
+                        name = config['credentials']['usernames'][login_username]['name']
+                        username = login_username
+                        auth_status = True
+                        st.success(f"Welcome {name}!")
+                        st.rerun()
+                    else:
+                        st.error("Invalid password")
+                else:
+                    st.error("User not found")
+        
+        with col2:
+            st.subheader("Sign Up")
+            new_user = st.text_input("New Username", key="signup_user")
+            new_name = st.text_input("Your Name", key="signup_name")
+            new_pass = st.text_input("New Password", type="password", key="signup_pass")
+            confirm_pass = st.text_input("Confirm Password", type="password", key="signup_confirm")
+            
+            if st.button("Create Account"):
+                if not all([new_user, new_name, new_pass, confirm_pass]):
+                    st.error("Fill all fields")
+                elif new_pass != confirm_pass:
+                    st.error("Passwords don't match")
+                elif new_user in config['credentials']['usernames']:
+                    st.error("Username taken")
+                else:
+                    config['credentials']['usernames'][new_user] = {
+                        'email': f"{new_user}@example.com",
+                        'name': new_name,
+                        'password': stauth.Hasher([new_pass]).generate()[0]
+                    }
+                    with open('config.yaml', 'w') as f:
+                        yaml.dump(config, f)
+                    st.success("Account created! Please login.")
+                    st.rerun()
+        
+        # Stop execution here - user needs to login
+        st.stop()
 
+# Check authentication status
 if auth_status == False:
     st.error('❌ Wrong username/password')
+    st.stop()
     
 if auth_status == None:
-    # --- SIGNUP FORM (ON SAME PAGE) ---
+    # User hasn't logged in yet - show simple signup option
     st.write("## 📝 Create Account")
     
     with st.form("signup"):
@@ -71,11 +126,6 @@ if auth_status == None:
                 st.error("Username taken")
             else:
                 # Add user
-                if 'credentials' not in config:
-                    config['credentials'] = {'usernames': {}}
-                if 'usernames' not in config['credentials']:
-                    config['credentials']['usernames'] = {}
-                
                 config['credentials']['usernames'][new_user] = {
                     'email': f"{new_user}@example.com",
                     'name': new_name,
@@ -84,6 +134,8 @@ if auth_status == None:
                 # Save
                 with open('config.yaml', 'w') as f:
                     yaml.dump(config, f)
+                st.success("✅ Account created! Please login.")
+                st.rerun()
     st.stop()
 
 # ============================================================

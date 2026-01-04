@@ -10,7 +10,103 @@ from yaml.loader import SafeLoader
 import streamlit_authenticator as stauth
 import json
 import os
-from pathlib import Path
+
+# ============================================================
+# SIMPLE AUTHENTICATION (UPDATED PER SCREENSHOTS)
+# ============================================================
+
+# Load or create config
+if not os.path.exists('config.yaml'):
+    # Create minimal config as per IMG_8821.png
+    with open('config.yaml', 'w') as f:
+        yaml.dump({
+            "credentials": {"usernames": {}},
+            "cookie": {"name": "portfolio_app", "key": "temporary-key-change-later-123", "expiry_days": 30},
+            "preauthorized": {"emails": []}
+        }, f)
+
+# Load config
+with open('config.yaml') as file:
+    config = yaml.load(file, Loader=SafeLoader)
+
+# Create authenticator
+authenticator = stauth.Authenticate(
+    config['credentials'],
+    config['cookie']['name'],
+    config['cookie']['key'],
+    config['cookie']['expiry_days'],
+    config['preauthorized']
+)
+
+# Show login
+name, auth_status, username = authenticator.login('Login', 'main')
+
+if auth_status == False:
+    st.error('❌ Wrong username/password')
+    
+if auth_status == None:
+    # --- SIGNUP FORM (ON SAME PAGE) ---
+    st.write("## 📝 Create Account")
+    
+    with st.form("signup"):
+        new_user = st.text_input("Username")
+        new_name = st.text_input("Your Name") 
+        new_pass = st.text_input("Password", type="password")
+        confirm_pass = st.text_input("Confirm Password", type="password")
+        
+        if st.form_submit_button("Create Account"):
+            if not all([new_user, new_name, new_pass, confirm_pass]):
+                st.error("Fill all fields")
+            elif new_pass != confirm_pass:
+                st.error("Passwords don't match")
+            elif new_user in config['credentials']['usernames']:
+                st.error("Username taken")
+            else:
+                # Add user
+                config['credentials']['usernames'][new_user] = {
+                    'email': f"{new_user}@example.com",
+                    'name': new_name,
+                    'password': stauth.Hasher([new_pass]).generate()[0]
+                }
+                # Save
+                with open('config.yaml', 'w') as f:
+                    yaml.dump(config, f)
+                st.success("✅ Account created! Please login.")
+                st.rerun()
+    st.stop()
+
+# ============================================================
+# SIMPLE PREFERENCES (NO SEPARATE CLASS)
+# ============================================================
+
+# Initialize user preferences in session state
+if 'user_prefs' not in st.session_state:
+    st.session_state.user_prefs = {}
+
+if username not in st.session_state.user_prefs:
+    # Default settings
+    st.session_state.user_prefs[username] = {
+        "start_date": "1900-01-01",
+        "risk_on_tickers": "TQQQ",
+        "risk_on_weights": "1.0", 
+        "risk_off_tickers": "AGG",
+        "risk_off_weights": "1.0",
+        "annual_drag_pct": 0.0,
+        "qs_cap_1": 10000,
+        "real_cap_1": 10000,
+        "end_date": "",
+        "official_inception_date": "2025-12-22",
+        "benchmark_ticker": "QQQ",
+        "min_holding_days": 1,
+    }
+
+# Helper function to get user pref
+def get_pref(key):
+    return st.session_state.user_prefs[username].get(key)
+
+# ============================================================
+# YOUR STRATEGY FUNCTIONS
+# ============================================================
 
 def show_strategy_overview():
     st.markdown("""
@@ -48,142 +144,19 @@ A "Risk Off Regime" = 200 Day SMA > Risk On Allocation Index.
 - When model flips from "Risk Off" to "Risk On", the model refers to the Allocation Tables and resumes the current SIG System weights.
 """)
 
-# ============================================================
-# AUTHENTICATION SETUP
-# ============================================================
-
-def setup_authentication():
-    """Set up authentication using streamlit-authenticator"""
-    try:
-        # Load configuration from YAML file
-        with open('config.yaml') as file:
-            config = yaml.load(file, Loader=SafeLoader)
-        
-        # Create authenticator object
-        authenticator = stauth.Authenticate(
-            config['credentials'],
-            config['cookie']['name'],
-            config['cookie']['key'],
-            config['cookie']['expiry_days'],
-            config['preauthorized']
-        )
-        return authenticator, config
-    except FileNotFoundError:
-        st.error("Configuration file 'config.yaml' not found. Please create it first.")
-        st.stop()
-    except Exception as e:
-        st.error(f"Error loading authentication configuration: {e}")
-        st.stop()
-
-# Initialize authentication
-authenticator, config = setup_authentication()
-
-# ============================================================
-# PORTFOLIO PREFERENCES MANAGER
-# ============================================================
-
-class PortfolioPreferences:
-    """Manage user portfolio preferences with file-based storage"""
-    
-    def __init__(self, username):
-        self.username = username
-        self.prefs_dir = Path("user_preferences")
-        self.prefs_dir.mkdir(exist_ok=True)
-        self.prefs_file = self.prefs_dir / f"{username}_preferences.json"
-        self.default_preferences = self._get_default_preferences()
-        self.preferences = self.load_preferences()
-    
-    def _get_default_preferences(self):
-        """Return default preferences for new users"""
-        return {
-            "start_date": "1900-01-01",
-            "risk_on_tickers": "TQQQ",
-            "risk_on_weights": "1.0",
-            "risk_off_tickers": "AGG",
-            "risk_off_weights": "1.0",
-            "annual_drag_pct": 0.0,
-            "qs_cap_1": 10000,
-            "real_cap_1": 10000,
-            "end_date": "",  # Empty for current date
-            "official_inception_date": "2025-12-22",
-            "benchmark_ticker": "QQQ",
-            "ma_type": "SMA",
-            "ma_length": 200,  # Fixed at 200
-            "tolerance_pct": 0.0,
-            "min_holding_days": 1,  # New: Minimum holding period after regime change
-        } 
-    
-    
-    def load_preferences(self):
-        """Load user preferences from file, or return defaults if file doesn't exist"""
-        if self.prefs_file.exists():
-            try:
-                with open(self.prefs_file, 'r') as f:
-                    saved_prefs = json.load(f)
-                # Merge with defaults to ensure all keys exist
-                merged_prefs = {**self.default_preferences, **saved_prefs}
-                # Ensure MA length is fixed at 200
-                merged_prefs['ma_length'] = 200
-                return merged_prefs
-            except Exception as e:
-                st.warning(f"Could not load saved preferences: {e}")
-                return self.default_preferences.copy()
-        else:
-            return self.default_preferences.copy()
-    
-    def save_preferences(self, prefs_dict):
-        """Save user preferences to file"""
-        try:
-            # Ensure MA length is fixed at 200
-            prefs_dict['ma_length'] = 200
-            with open(self.prefs_file, 'w') as f:
-                json.dump(prefs_dict, f, indent=4)
-            self.preferences = prefs_dict.copy()
-            return True
-        except Exception as e:
-            st.error(f"Error saving preferences: {e}")
-            return False
-    
-    def get_all_preferences(self):
-        """Return all current preferences"""
-        return self.preferences.copy()
-    
-    def reset_to_defaults(self):
-        """Reset preferences to defaults"""
-        self.preferences = self.default_preferences.copy()
-        self.save_preferences(self.preferences)
-        return True
-
-# ============================================================
 # CONFIG
-# ============================================================
-
 DEFAULT_START_DATE = "1900-01-01"
 RISK_FREE_RATE = 0.0
-
-RISK_ON_WEIGHTS = {
-    "TQQQ": 1.0,
-}
-
-RISK_OFF_WEIGHTS = {
-    "AGG": 1.0,
-}
-
+RISK_ON_WEIGHTS = {"TQQQ": 1.0}
+RISK_OFF_WEIGHTS = {"AGG": 1.0}
 FLIP_COST = 0.0000
-
-# Starting weights inside the SIG engine (unchanged)
 START_RISKY = 0.6
 START_SAFE  = 0.4
-
-# ============================================================
-# DATA LOADING
-# ============================================================
 
 @st.cache_data(show_spinner=True)
 def load_price_data(tickers, start_date, end_date=None):
     data = yf.download(tickers, start=start_date, end=end_date, progress=False)
 
-    # Prefer Adjusted Close, but fall back to Close if Adj Close is missing
     if "Adj Close" in data.columns:
         px = data["Adj Close"].copy()
         if "Close" in data.columns:
@@ -196,21 +169,7 @@ def load_price_data(tickers, start_date, end_date=None):
 
     return px.dropna(how="all")
 
-
-# ============================================================
-# BUILD PORTFOLIO INDEX — SIMPLE RETURNS WITH DRAG
-# ============================================================
-
 def build_portfolio_index(prices, weights_dict, annual_drag_pct=0.0):
-    """
-    Build portfolio index with optional daily drag applied to entire portfolio.
-    
-    Args:
-        prices: DataFrame of prices
-        weights_dict: Dictionary of ticker weights
-        annual_drag_pct: Annual drag percentage as decimal (e.g., 0.04 for 4%)
-                        Applied to entire portfolio. If 0, no drag is applied.
-    """
     simple_rets = prices.pct_change().fillna(0)
     idx_rets = pd.Series(0.0, index=simple_rets.index)
 
@@ -218,38 +177,25 @@ def build_portfolio_index(prices, weights_dict, annual_drag_pct=0.0):
         if ticker in simple_rets.columns:
             idx_rets += simple_rets[ticker] * weight
     
-    # Apply daily drag to ENTIRE portfolio if drag > 0
     if annual_drag_pct > 0:
-        # Convert annual drag to daily: (1 - drag)^(1/252)
         daily_drag_factor = (1 - annual_drag_pct) ** (1/252)
-        # Apply drag to entire portfolio return: (1 + portfolio_return) * daily_drag_factor - 1
         idx_rets = (1 + idx_rets) * daily_drag_factor - 1
     
-    # Create cumulative product
     cumprod = (1 + idx_rets).cumprod()
     
-    # Find first valid (non-NaN, non-zero) index
     valid_mask = cumprod.notna() & (cumprod > 0)
     if not valid_mask.any():
-        # All values are NaN or zero - return a constant series
         return pd.Series(1.0, index=cumprod.index)
     
     first_valid_idx = cumprod[valid_mask].index[0]
     
-    # Forward fill from first valid value
     cumprod_filled = cumprod.copy()
-    cumprod_filled.loc[:first_valid_idx] = 1.0  # Set early values to 1.0
+    cumprod_filled.loc[:first_valid_idx] = 1.0
     cumprod_filled = cumprod_filled.ffill()
     
     return cumprod_filled
 
-
-# ============================================================
-# MA MATRIX
-# ============================================================
-
 def compute_ma(price_series, length, ma_type):
-    """Compute a single MA with fixed parameters"""
     if ma_type.lower() == "ema":
         ma = price_series.ewm(span=length, adjust=False).mean()
     else:
@@ -257,26 +203,11 @@ def compute_ma(price_series, length, ma_type):
     
     return ma.shift(1)
 
-
-# ============================================================
-# TESTFOL SIGNAL LOGIC - ROBUST VERSION WITH MINIMUM HOLDING PERIOD
-# ============================================================
-
 def generate_testfol_signal_vectorized(price, ma, tol_series, min_holding_days=5):
-    """
-    Generate regime signals with minimum holding period enforcement.
-    
-    Args:
-        price: Price series
-        ma: Moving average series
-        tol_series: Tolerance series (percentage as decimal)
-        min_holding_days: Minimum days to hold after a regime change
-    """
     px = price.values
     ma_vals = ma.values
     n = len(px)
     
-    # Handle case where all values are NaN
     if np.all(np.isnan(ma_vals)):
         return pd.Series(False, index=ma.index)
     
@@ -286,7 +217,6 @@ def generate_testfol_signal_vectorized(price, ma, tol_series, min_holding_days=5
     
     sig = np.zeros(n, dtype=bool)
     
-    # Find first non-NaN index
     non_nan_mask = ~np.isnan(ma_vals)
     if not np.any(non_nan_mask):
         return pd.Series(False, index=ma.index)
@@ -296,11 +226,9 @@ def generate_testfol_signal_vectorized(price, ma, tol_series, min_holding_days=5
         first_valid = 1
     start_index = first_valid + 1
     
-    # Ensure start_index is valid
     if start_index >= n:
         return pd.Series(False, index=ma.index)
     
-    # Initialize minimum holding period tracker
     days_since_last_change = 0
     last_change_idx = start_index
     
@@ -308,37 +236,26 @@ def generate_testfol_signal_vectorized(price, ma, tol_series, min_holding_days=5
         if np.isnan(px[t]) or np.isnan(upper[t]) or np.isnan(lower[t]):
             sig[t] = sig[t-1] if t > 0 else False
         elif t - last_change_idx < min_holding_days:
-            # Enforce minimum holding period
             sig[t] = sig[t-1]
         elif not sig[t - 1]:
-            # Currently in RISK-OFF regime
             if px[t] > upper[t]:
-                # Signal change to RISK-ON
                 sig[t] = True
                 last_change_idx = t
                 days_since_last_change = 0
             else:
                 sig[t] = False
         else:
-            # Currently in RISK-ON regime
             if px[t] < lower[t]:
-                # Signal change to RISK-OFF
                 sig[t] = False
                 last_change_idx = t
                 days_since_last_change = 0
             else:
                 sig[t] = True
         
-        # Increment days since last change
         if t > last_change_idx:
             days_since_last_change += 1
     
     return pd.Series(sig, index=ma.index).fillna(False)
-
-
-# ============================================================
-# SIG ENGINE — NOW USING CALENDAR QUARTER-ENDS (B1)
-# ============================================================
 
 def run_sig_engine(
     risk_on_returns,
@@ -348,9 +265,9 @@ def run_sig_engine(
     pure_sig_rw=None,
     pure_sig_sw=None,
     flip_cost=FLIP_COST,
-    quarter_end_dates=None,   # <-- must be mapped_q_ends
-    quarterly_multiplier=4.0,  # NEW: 2x for SIG, 2x for Sigma (quarterly part)
-    ma_flip_multiplier=4.0     # NEW: 4x for Sigma when MA flips
+    quarter_end_dates=None,
+    quarterly_multiplier=4.0,
+    ma_flip_multiplier=4.0
 ):
 
     dates = risk_on_returns.index
@@ -359,14 +276,10 @@ def run_sig_engine(
     if quarter_end_dates is None:
         raise ValueError("quarter_end_dates must be supplied")
 
-    # Fast lookup
     quarter_end_set = set(quarter_end_dates)
-
-    # MA flip detection
     sig_arr = ma_signal.astype(int)
     flip_mask = sig_arr.diff().abs() == 1
 
-    # Init values
     eq = 10000.0
     risky_val = eq * START_RISKY
     safe_val  = eq * START_SAFE
@@ -388,16 +301,10 @@ def run_sig_engine(
         r_off = risk_off_returns.iloc[i]
         ma_on = bool(ma_signal.iloc[i])
         
-        # ============================================
-        # FIX: Apply MA flip costs BEFORE checking regime
-        # ============================================
-        if i > 0 and flip_mask.iloc[i]:  # Skip first day (no diff)
-            eq *= (1 - flip_cost * ma_flip_multiplier)  # Use parameter, not hardcoded
-        # ============================================
+        if i > 0 and flip_mask.iloc[i]:
+            eq *= (1 - flip_cost * ma_flip_multiplier)
 
         if ma_on:
-
-            # Restore pure-SIG weights after exiting RISK-OFF
             if frozen_risky is not None:
                 w_r = pure_sig_rw.iloc[i]
                 w_s = pure_sig_sw.iloc[i]
@@ -406,28 +313,18 @@ def run_sig_engine(
                 frozen_risky = None
                 frozen_safe  = None
 
-            # Apply daily returns
             risky_val *= (1 + r_on)
             safe_val  *= (1 + r_off)
 
-            # Rebalance ON quarter-end date (correct logic)
             if date in quarter_end_set:
-
-                # Identify actual quarter start (previous quarter end)
                 prev_qs = [qd for qd in quarter_end_dates if qd < date]
 
                 if prev_qs:
                     prev_q = prev_qs[-1]
-
                     idx_prev = dates.get_loc(prev_q)
-
-                    # Risky sleeve at the start of this quarter
                     risky_at_qstart = risky_val_series[idx_prev]
-
-                    # Quarterly growth target
                     goal_risky = risky_at_qstart * (1 + target_quarter)
 
-                    # --- Apply SIG logic (unchanged) ---
                     if risky_val > goal_risky:
                         excess = risky_val - goal_risky
                         risky_val -= excess
@@ -441,26 +338,21 @@ def run_sig_engine(
                         risky_val += move
                         rebalance_dates.append(date)
 
-                    # Apply quarterly fee with multiplier
                     eq *= (1 - flip_cost * quarterly_multiplier)
 
-            # Update equity
             eq = risky_val + safe_val
             risky_w = risky_val / eq
             safe_w  = safe_val  / eq
 
         else:
-            # Freeze values on entering RISK-OFF
             if frozen_risky is None:
                 frozen_risky = risky_val
                 frozen_safe  = safe_val
 
-            # Only safe sleeve earns returns
             eq *= (1 + r_off)
             risky_w = 0.0
             safe_w  = 1.0
 
-        # Store values
         equity_curve.append(eq)
         risky_w_series.append(risky_w)
         safe_w_series.append(safe_w)
@@ -473,11 +365,6 @@ def run_sig_engine(
         pd.Series(safe_w_series, index=dates),
         rebalance_dates
     )
-
-
-# ============================================================
-# BACKTEST ENGINE WITH DRAG
-# ============================================================
 
 def build_weight_df(prices, signal, risk_on_weights, risk_off_weights):
     weights = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
@@ -492,34 +379,7 @@ def build_weight_df(prices, signal, risk_on_weights, risk_off_weights):
 
     return weights
 
-
-def compute_performance(simple_returns, eq_curve, rf=0.0):
-    if len(eq_curve) == 0 or eq_curve.iloc[0] == 0:
-        return {
-            "CAGR": 0,
-            "Volatility": 0,
-            "Sharpe": 0,
-            "MaxDrawdown": 0,
-            "TotalReturn": 0,
-            "DD_Series": pd.Series([], dtype=float)
-        }
-    
-    cagr = (eq_curve.iloc[-1] / eq_curve.iloc[0]) ** (252 / len(eq_curve)) - 1
-    vol = simple_returns.std() * np.sqrt(252) if len(simple_returns) > 0 else 0
-    sharpe = (simple_returns.mean() * 252 - rf) / vol if vol > 0 else 0
-    dd = eq_curve / eq_curve.cummax() - 1
-
-    return {
-        "CAGR": cagr,
-        "Volatility": vol,
-        "Sharpe": sharpe,
-        "MaxDrawdown": dd.min() if len(dd) > 0 else 0,
-        "TotalReturn": eq_curve.iloc[-1] / eq_curve.iloc[0] - 1 if eq_curve.iloc[0] != 0 else 0,
-        "DD_Series": dd
-    }
-
 def compute_enhanced_performance(simple_returns, eq_curve, rf=0.0):
-    """Compute comprehensive performance metrics"""
     if len(eq_curve) == 0 or eq_curve.iloc[0] == 0:
         return {
             "CAGR": 0, "Volatility": 0, "Sharpe": 0, "MaxDrawdown": 0,
@@ -529,7 +389,6 @@ def compute_enhanced_performance(simple_returns, eq_curve, rf=0.0):
             "ProfitFactor": 0, "RecoveryFactor": 0, "UlcerIndex": 0, "TailRatio": 0
         }
     
-    # Basic metrics
     n_days = len(eq_curve)
     n_years = n_days / 252
     cagr = (eq_curve.iloc[-1] / eq_curve.iloc[0]) ** (1 / n_years) - 1
@@ -538,21 +397,17 @@ def compute_enhanced_performance(simple_returns, eq_curve, rf=0.0):
     dd = eq_curve / eq_curve.cummax() - 1
     max_dd = dd.min() if len(dd) > 0 else 0
     
-    # Sortino ratio (downside deviation)
     downside_returns = simple_returns[simple_returns < 0]
     downside_dev = downside_returns.std() * np.sqrt(252) if len(downside_returns) > 0 else 0
     sortino = (simple_returns.mean() * 252 - rf) / downside_dev if downside_dev > 0 else 0
     
-    # Calmar ratio
     calmar = cagr / abs(max_dd) if max_dd != 0 else 0
     
-    # Omega ratio
     threshold = 0.0
     gains = simple_returns[simple_returns > threshold].sum()
     losses = abs(simple_returns[simple_returns < threshold].sum())
     omega = gains / losses if losses > 0 else 0
     
-    # Win rate and profit factor
     positive_rets = simple_returns[simple_returns > 0]
     negative_rets = simple_returns[simple_returns < 0]
     win_rate = len(positive_rets) / len(simple_returns) if len(simple_returns) > 0 else 0
@@ -560,21 +415,16 @@ def compute_enhanced_performance(simple_returns, eq_curve, rf=0.0):
     gross_loss = abs(negative_rets.sum())
     profit_factor = gross_profit / gross_loss if gross_loss > 0 else 0
     
-    # Risk metrics
     var_95 = np.percentile(simple_returns, 5) * np.sqrt(252)
     cvar_95 = simple_returns[simple_returns <= np.percentile(simple_returns, 5)].mean() * np.sqrt(252) if len(simple_returns) > 0 else 0
     
-    # Skewness and kurtosis
     skewness = simple_returns.skew() if len(simple_returns) > 0 else 0
     kurtosis = simple_returns.kurt() if len(simple_returns) > 0 else 0
     
-    # Ulcer index
     ulcer_index = np.sqrt((dd ** 2).mean()) if len(dd) > 0 else 0
     
-    # Recovery factor
     recovery_factor = -cagr / max_dd if max_dd != 0 else 0
     
-    # Tail ratio (95% gain vs 5% loss)
     top_5 = np.percentile(simple_returns, 95)
     bottom_5 = np.percentile(simple_returns, 5)
     tail_ratio = abs(top_5 / bottom_5) if bottom_5 != 0 else 0
@@ -608,10 +458,8 @@ def backtest(prices, signal, risk_on_weights, risk_off_weights, flip_cost, ma_fl
     sig_arr = signal.astype(int)
     flip_mask = sig_arr.diff().abs() == 1
 
-    # MA flip costs with multiplier
     flip_costs = np.where(flip_mask, -flip_cost * ma_flip_multiplier, 0.0)
     
-    # Apply portfolio drag (if any) to strategy returns
     if annual_drag_pct > 0:
         daily_drag_factor = (1 - annual_drag_pct) ** (1/252)
         strategy_simple = (1 + strategy_simple) * daily_drag_factor - 1
@@ -625,22 +473,9 @@ def backtest(prices, signal, risk_on_weights, risk_off_weights, flip_cost, ma_fl
         "equity_curve": eq,
         "signal": signal,
         "weights": weights,
-        "performance": compute_enhanced_performance(strat_adj, eq),  # Changed to enhanced
+        "performance": compute_enhanced_performance(strat_adj, eq),
         "flip_mask": flip_mask,
     }
-    
-def compute_total_return(eq_series, start_date):
-    """
-    Compute total return from a given start date to latest.
-    """
-    eq = eq_series.loc[eq_series.index >= pd.to_datetime(start_date)]
-    if len(eq) < 2:
-        return np.nan
-    return eq.iloc[-1] / eq.iloc[0] - 1
-    
-# ============================================================
-# QUARTERLY PROGRESS HELPER (unchanged)
-# ============================================================
 
 def compute_quarter_progress(risky_start, risky_today, quarterly_target):
     target_risky = risky_start * (1 + quarterly_target)
@@ -655,20 +490,12 @@ def compute_quarter_progress(risky_start, risky_today, quarterly_target):
         "Gap (%)": pct_gap,
     }
 
-
 def normalize(eq):
     if len(eq) == 0 or eq.iloc[0] == 0:
         return eq
     return eq / eq.iloc[0] * 10000
 
-
-# ============================================================
-# 4-PANEL DIAGNOSTIC PERFORMANCE PLOT
-# ============================================================
-
 def plot_diagnostics(hybrid_eq, bh_eq, hybrid_signal):
-
-    # Normalize to common starting value
     hybrid_eq = hybrid_eq / hybrid_eq.iloc[0]
     bh_eq     = bh_eq / bh_eq.iloc[0]
 
@@ -687,7 +514,6 @@ def plot_diagnostics(hybrid_eq, bh_eq, hybrid_signal):
 
     fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(14, 10))
 
-    # === Panel 1: Cumulative returns + regime shading ===
     ax1.plot(hybrid_eq, label="Sigma", linewidth=2, color="green")
     ax1.plot(bh_eq, label="Buy & Hold", linewidth=2, alpha=0.7)
 
@@ -708,7 +534,6 @@ def plot_diagnostics(hybrid_eq, bh_eq, hybrid_signal):
     ax1.legend()
     ax1.grid(alpha=0.3)
 
-    # === Panel 2: Drawdowns ===
     ax2.plot(hybrid_dd * 100, label="Sigma", linewidth=1.5, color="green")
     ax2.plot(bh_dd * 100, label="Buy & Hold", linewidth=1.5, alpha=0.7)
     ax2.set_title("Drawdown Comparison (%)")
@@ -716,7 +541,6 @@ def plot_diagnostics(hybrid_eq, bh_eq, hybrid_signal):
     ax2.legend()
     ax2.grid(alpha=0.3)
 
-    # === Panel 3: Rolling Sharpe ===
     ax3.plot(roll_sharpe_h, label="Sigma", linewidth=1.5, color="green")
     ax3.plot(roll_sharpe_b, label="Buy & Hold", linewidth=1.5, alpha=0.7)
     ax3.axhline(0, color="black", linewidth=0.5)
@@ -724,7 +548,6 @@ def plot_diagnostics(hybrid_eq, bh_eq, hybrid_signal):
     ax3.legend()
     ax3.grid(alpha=0.3)
 
-    # === Panel 4: Monthly return distribution ===
     bins = np.linspace(
         min(hybrid_m.min(), bh_m.min()),
         max(hybrid_m.max(), bh_m.max()),
@@ -740,50 +563,29 @@ def plot_diagnostics(hybrid_eq, bh_eq, hybrid_signal):
 
     plt.tight_layout()
     return fig
-    
-# ============================================================
-# MONTE CARLO SIMULATION FUNCTIONS - CORRECTED VERSION
-# ============================================================
 
 def monte_carlo_strategy_analysis(strategy_returns, strategy_equity, n_sim=10000, periods=252, initial_capital=None):
-    """
-    Run Monte Carlo simulation for a strategy with user-specified initial capital.
-    
-    Args:
-        strategy_returns: Daily returns series
-        strategy_equity: Equity curve series
-        n_sim: Number of simulations
-        periods: Number of trading days to simulate (252 = 1 year)
-        initial_capital: User-specified starting capital. If None, uses last equity value.
-    """
     if len(strategy_returns) < 100:
         return None
     
-    # Use simple returns for simulation
     mu_daily = strategy_returns.mean()
     sigma_daily = strategy_returns.std()
     
-    # Use user-specified initial capital or last equity value
     if initial_capital is not None:
         initial_price = initial_capital
     else:
         initial_price = strategy_equity.iloc[-1] if len(strategy_equity) > 0 else 10000
     
-    # Simulate daily returns using correct scaling
-    np.random.seed(42)  # For reproducibility
+    np.random.seed(42)
     sim_returns = np.random.normal(mu_daily, sigma_daily, (n_sim, periods))
     
-    # Calculate cumulative portfolio values using simple returns (not log returns)
     sim_values = initial_price * np.cumprod(1 + sim_returns, axis=1)
     
-    # Terminal values and returns
     terminal_values = sim_values[:, -1]
     terminal_returns = (terminal_values / initial_price) - 1
     
-    # Analysis
     percentiles = np.percentile(terminal_returns, list(range(5, 100, 5)))
     
-    # CVaR calculations
     def calculate_cvar(returns, confidence):
         threshold = np.percentile(returns, 100 - confidence)
         bad_returns = returns[returns <= threshold]
@@ -793,12 +595,10 @@ def monte_carlo_strategy_analysis(strategy_returns, strategy_equity, n_sim=10000
     cvar_95 = calculate_cvar(terminal_returns, 95)
     cvar_99 = calculate_cvar(terminal_returns, 99)
     
-    # Expected metrics
     expected_return = np.mean(terminal_returns)
-    expected_vol = np.std(terminal_returns) # Annualize for display
+    expected_vol = np.std(terminal_returns)
     prob_positive = np.mean(terminal_returns > 0)
     
-    # Calculate terminal value percentiles
     terminal_value_percentiles = np.percentile(terminal_values, [5, 25, 50, 75, 95])
     
     return {
@@ -819,18 +619,13 @@ def monte_carlo_strategy_analysis(strategy_returns, strategy_equity, n_sim=10000
     }
 
 def plot_monte_carlo_results(results_dict, strategy_names):
-    """
-    Create visualization for Monte Carlo results.
-    """
     fig, axes = plt.subplots(2, 3, figsize=(15, 10))
     
     colors = plt.cm.Set1(np.linspace(0, 1, len(results_dict)))
     
-    # Panel 1: Terminal return distributions (as percentages)
     ax = axes[0, 0]
     for i, (name, results) in enumerate(results_dict.items()):
         if results is not None:
-            # Convert to percentages
             returns_pct = results['terminal_returns'] * 100
             ax.hist(returns_pct, bins=50, alpha=0.5, 
                    label=name, density=True, color=colors[i])
@@ -841,12 +636,10 @@ def plot_monte_carlo_results(results_dict, strategy_names):
     ax.legend()
     ax.grid(alpha=0.3)
     
-    # Panel 2: Percentile ranges (as percentages)
     ax = axes[0, 1]
     percentile_levels = list(range(5, 100, 5))
     for i, (name, results) in enumerate(results_dict.items()):
         if results is not None:
-            # Convert to percentages
             percentiles_pct = results['percentiles'] * 100
             ax.plot(percentile_levels, percentiles_pct, 
                    marker='o', label=name, color=colors[i])
@@ -857,7 +650,6 @@ def plot_monte_carlo_results(results_dict, strategy_names):
     ax.legend()
     ax.grid(alpha=0.3)
     
-    # Panel 3: CVaR comparison (as percentages)
     ax = axes[0, 2]
     cvar_data = []
     labels = []
@@ -879,11 +671,9 @@ def plot_monte_carlo_results(results_dict, strategy_names):
         ax.legend()
         ax.grid(alpha=0.3)
     
-    # Panel 4: Sample price paths (in dollars)
     ax = axes[1, 0]
     for i, (name, results) in enumerate(results_dict.items()):
         if results is not None:
-            # Plot 20 sample paths
             for j in range(min(20, results['sim_prices'].shape[0])):
                 ax.plot(results['sim_prices'][j, :], alpha=0.1, color=colors[i])
     ax.set_title('Sample Portfolio Paths ($)')
@@ -891,13 +681,11 @@ def plot_monte_carlo_results(results_dict, strategy_names):
     ax.set_ylabel('Portfolio Value ($)')
     ax.grid(alpha=0.3)
     
-    # Panel 5: Risk-return scatter (annualized)
     ax = axes[1, 1]
     for i, (name, results) in enumerate(results_dict.items()):
         if results is not None:
             ax.scatter(results['expected_vol'], results['expected_return'] * 100, 
                       s=100, label=name, color=colors[i], alpha=0.7)
-            # Add text annotation
             ax.text(results['expected_vol']*1.01, results['expected_return']*100*1.01, 
                    name, fontsize=9, alpha=0.8)
     ax.axhline(y=0, color='black', linestyle='--', linewidth=0.5)
@@ -907,7 +695,6 @@ def plot_monte_carlo_results(results_dict, strategy_names):
     ax.set_ylabel('Expected Return (% Annualized)')
     ax.grid(alpha=0.3)
     
-    # Panel 6: Probability of positive return
     ax = axes[1, 2]
     prob_data = []
     prob_labels = []
@@ -924,7 +711,6 @@ def plot_monte_carlo_results(results_dict, strategy_names):
         ax.set_xticklabels(prob_labels, rotation=45, ha='right')
         ax.axhline(y=50, color='red', linestyle='--', linewidth=1, alpha=0.5)
         
-        # Add value labels on bars
         for bar, val in zip(bars, prob_data):
             ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
                    f'{val:.1f}%', ha='center', va='bottom', fontsize=9)
@@ -940,444 +726,222 @@ def plot_monte_carlo_results(results_dict, strategy_names):
 def main():
     st.set_page_config(page_title="Portfolio MA Regime Strategy", layout="wide")
     
-    # ============================================================
-    # SIMPLE AUTHENTICATION
-    # ============================================================
-    
-    # Show login form
-    name, authentication_status, username = authenticator.login('Login', 'main')
-    
-    # Handle authentication
-    if authentication_status == False:
-        st.error('Username/password is incorrect')
-        st.stop()
-    
-    if authentication_status == None:
-        # Show signup option
-        if st.button("Don't have an account? Sign up"):
-            st.switch_page("pages/signup.py")
-        st.stop()
-    
-    # If we get here, user is authenticated!
-    st.sidebar.title(f"Welcome {name}!")
-    
-    show_strategy_overview()
-    st.markdown("---")
-    
-    # Initialize portfolio preferences for this user
-    if 'portfolio_prefs' not in st.session_state:
-        st.session_state.portfolio_prefs = PortfolioPreferences(username)
-    
-    portfolio_prefs = st.session_state.portfolio_prefs
-    
-    # Load user preferences
-    user_prefs = portfolio_prefs.get_all_preferences()
+    # User is authenticated at this point
+    st.sidebar.title(f"👋 Welcome {name}!")
     
     # Logout button
     if st.sidebar.button("Logout"):
         authenticator.logout('Logout', 'main')
         st.rerun()
     
-    # ============================================================
-    # OFFICIAL STRATEGY INCEPTION & LIVE PERFORMANCE SNAPSHOT
-    # ============================================================
-
-    # ============================================================
-    # SIDEBAR INPUTS (loaded from user preferences)
-    # ============================================================
+    show_strategy_overview()
+    st.markdown("---")
     
-    # Start date with saved preference
-    start = st.sidebar.text_input("Backtest Start Date", user_prefs["start_date"])
+    # --- SIDEBAR INPUTS ---
+    st.sidebar.header("Strategy Settings")
     
-    # SET FIXED MA PARAMETERS
-    ma_type = "SMA"
-    ma_length = 200
-    tolerance_pct = 0.0
-    tolerance_decimal = 0.0
+    # Load saved prefs
+    prefs = st.session_state.user_prefs[username]
     
-    # End date with saved preference
-    end = st.sidebar.text_input("End Date (optional)", user_prefs["end_date"])
-
-    # OFFICIAL STRATEGY INCEPTION DATE
-    st.sidebar.header("Strategy Inception")
-    official_inception_date = st.sidebar.text_input(
-        "Official Strategy Inception Date", 
-        user_prefs["official_inception_date"],
-        help="The date you officially implemented this strategy."
-    )
-
-    # BENCHMARK TICKER
-    benchmark_ticker = st.sidebar.text_input(
-        "Benchmark Ticker for Comparison", 
-        user_prefs["benchmark_ticker"],
-        help="Ticker to compare your strategy against (e.g., QQQ, SPY, VTI)"
-    )
-
-    st.sidebar.header("Risk On Allocation")
-    # Risk On tickers with saved preference
-    risk_on_tickers_str = st.sidebar.text_input(
-        "Tickers", 
-        user_prefs["risk_on_tickers"],
-        key="risk_on_tickers_input"
-    )
-    risk_on_weights_str = st.sidebar.text_input(
-        "Weights", 
-        user_prefs["risk_on_weights"],
-        key="risk_on_weights_input"
-    )
-
-    st.sidebar.header("Risk Off Allocation")
-    # Risk Off tickers with saved preference
-    risk_off_tickers_str = st.sidebar.text_input(
-        "Tickers", 
-        user_prefs["risk_off_tickers"],
-        key="risk_off_tickers_input"
-    )
-    risk_off_weights_str = st.sidebar.text_input(
-        "Weights", 
-        user_prefs["risk_off_weights"],
-        key="risk_off_weights_input"
-    )
+    # Input fields with saved values
+    start = st.sidebar.text_input("Start Date", prefs["start_date"])
+    risk_on_tickers_str = st.sidebar.text_input("Risk On Tickers", prefs["risk_on_tickers"])
+    risk_on_weights_str = st.sidebar.text_input("Risk On Weights", prefs["risk_on_weights"])
+    risk_off_tickers_str = st.sidebar.text_input("Risk Off Tickers", prefs["risk_off_tickers"])
+    risk_off_weights_str = st.sidebar.text_input("Risk Off Weights", prefs["risk_off_weights"])
+    annual_drag = st.sidebar.number_input("Annual Drag %", value=float(prefs["annual_drag_pct"]))
+    qs_cap_1 = st.sidebar.number_input("Portfolio Value at Last Rebalance", value=float(prefs["qs_cap_1"]))
+    real_cap_1 = st.sidebar.number_input("Portfolio Value Today", value=float(prefs["real_cap_1"]))
+    inception_date = st.sidebar.text_input("Inception Date", prefs["official_inception_date"])
+    benchmark = st.sidebar.text_input("Benchmark", prefs["benchmark_ticker"])
+    min_days = st.sidebar.number_input("Confirmation Days", value=int(prefs["min_holding_days"]))
     
-    # PORTFOLIO DRAG INPUT with saved preference
-    st.sidebar.header("Portfolio Drag")
-    annual_drag_pct = st.sidebar.number_input(
-        "Annual Portfolio Drag (%)", 
-        min_value=0.0, 
-        max_value=20.0, 
-        value=float(user_prefs["annual_drag_pct"]),
-        step=0.1,
-        format="%.1f",
-        help="Annual decay/drag applied to entire portfolio. Use ~4.0% for leveraged ETFs."
-    )
-    annual_drag_decimal = annual_drag_pct / 100.0
+    # Save button
+    if st.sidebar.button("💾 Save Settings", type="primary"):
+        # Save to session
+        st.session_state.user_prefs[username] = {
+            "start_date": start,
+            "risk_on_tickers": risk_on_tickers_str,
+            "risk_on_weights": risk_on_weights_str,
+            "risk_off_tickers": risk_off_tickers_str,
+            "risk_off_weights": risk_off_weights_str,
+            "annual_drag_pct": annual_drag,
+            "qs_cap_1": qs_cap_1,
+            "real_cap_1": real_cap_1,
+            "end_date": "",
+            "official_inception_date": inception_date,
+            "benchmark_ticker": benchmark,
+            "min_holding_days": min_days,
+        }
+        st.sidebar.success("Settings saved!")
     
-    # MOVING AVERAGE PARAMETERS - FIXED IN BACKGROUND
-    # MA is always 200-day SMA with 0% tolerance
-    ma_type = "SMA"
-    ma_length = 200
-    tolerance_pct = 0.0
-    tolerance_decimal = 0.0
+    run_clicked = st.sidebar.button("🚀 Run Analysis", type="secondary")
     
-    # MINIMUM HOLDING PERIOD
-    min_holding_days = st.sidebar.number_input(
-        "Confirmation Days",
-        min_value=1,
-        max_value=365,
-        value=int(user_prefs["min_holding_days"]),
-        step=1,
-        help="The number of days to hold after a 200 Day SMA crossover."
-    )
-
-    st.sidebar.header("Quarterly Portfolio Values")
-    # Portfolio values with saved preferences - only ONE portfolio now
-    qs_cap_1 = st.sidebar.number_input("Portfolio Value at Last Rebalance ($)", 
-                                       min_value=0.0, 
-                                       value=float(user_prefs["qs_cap_1"]), 
-                                       step=100.0)
-
-    st.sidebar.header("Current Portfolio Values (Today)")
-    # Current portfolio values with saved preferences - only ONE portfolio now
-    real_cap_1 = st.sidebar.number_input("Portfolio Value Today ($)", 
-                                         min_value=0.0, 
-                                         value=float(user_prefs["real_cap_1"]), 
-                                         step=100.0)
-
-    
-    st.caption(
-        f"**Official Strategy Inception Date:** {official_inception_date} "
-        "— performance after this date is documented for actual performance tracking."
-    )
-    
-    # ============================================================
-    # SAVE SETTINGS BUTTON (Saves to user's file)
-    # ============================================================
-    st.sidebar.markdown("---")
-    
-    col1, col2 = st.sidebar.columns(2)
-    
-    with col1:
-        if st.button("Save Configuration", type="primary", use_container_width=True):
-            # Collect all current settings
-            preferences = {
-                "start_date": start,
-                "risk_on_tickers": risk_on_tickers_str,
-                "risk_on_weights": risk_on_weights_str,
-                "risk_off_tickers": risk_off_tickers_str,
-                "risk_off_weights": risk_off_weights_str,
-                "annual_drag_pct": annual_drag_pct,
-                "qs_cap_1": qs_cap_1,
-                "real_cap_1": real_cap_1,
-                "end_date": end,
-                "official_inception_date": official_inception_date,
-                "benchmark_ticker": benchmark_ticker,
-                "ma_type": "SMA",
-                "ma_length": 200,  # Fixed at 200
-                "tolerance_pct": 0.0,
-                "min_holding_days": min_holding_days,  # New parameter
-            }
-            
-            # Save to user's file
-            if portfolio_prefs.save_preferences(preferences):
-                st.sidebar.success("✅ Settings saved successfully!")
-                # Update session state
-                st.session_state.portfolio_prefs = portfolio_prefs
-                st.rerun()
-            else:
-                st.sidebar.error("Failed to save settings")
-    
-    with col2:
-        if st.button("Reset to Default Configuration", use_container_width=True):
-            if portfolio_prefs.reset_to_defaults():
-                st.sidebar.info("Settings reset to defaults")
-                st.rerun()
-    
-    # Show current save status
-    st.sidebar.caption(f"Settings saved for: {username}")
-    
-    run_clicked = st.sidebar.button("Run", type="secondary", use_container_width=True)
     if not run_clicked:
-        st.info("Adjust your configuration in the sidebar and click 'Run'")
+        st.info("Adjust settings in sidebar and click 'Run Analysis'")
         st.stop()
-
+    
+    # Process inputs
     risk_on_tickers = [t.strip().upper() for t in risk_on_tickers_str.split(",")]
     risk_on_weights_list = [float(x) for x in risk_on_weights_str.split(",")]
     risk_on_weights = dict(zip(risk_on_tickers, risk_on_weights_list))
-
+    
     risk_off_tickers = [t.strip().upper() for t in risk_off_tickers_str.split(",")]
     risk_off_weights_list = [float(x) for x in risk_off_weights_str.split(",")]
     risk_off_weights = dict(zip(risk_off_tickers, risk_off_weights_list))
-
-    all_tickers = sorted(set(risk_on_tickers + risk_off_tickers))
-    end_val = end if end.strip() else None
-
-    prices = load_price_data(all_tickers, start, end_val).dropna(how="any")
     
-    # Check if we have any data
+    annual_drag_decimal = annual_drag / 100.0
+    
+    all_tickers = sorted(set(risk_on_tickers + risk_off_tickers))
+    end_val = ""
+    prices = load_price_data(all_tickers, start, end_val if end_val else None).dropna(how="any")
+    
     if len(prices) == 0:
         st.error("No data loaded. Please check your ticker symbols and date range.")
         st.stop()
     
     st.info(f"Loaded {len(prices)} trading days of data from {prices.index[0].date()} to {prices.index[-1].date()} for backtesting")
     
-    # MA IS FIXED AT 200
-    best_len = 200  # Always fixed
-    best_type = "sma"  # Always SMA
+    # MA is always 200-day SMA
+    best_len = 200
+    best_type = "sma"
     
-    # Generate signal with user parameters including minimum holding period
     portfolio_index = build_portfolio_index(prices, risk_on_weights, annual_drag_pct=annual_drag_decimal)
-    
-    # ============================================================
-    # USE USER-SELECTED TOLERANCE
-    # ============================================================
-
     opt_ma = compute_ma(portfolio_index, best_len, best_type)
     
-    # Use user-selected tolerance directly
-    best_tol = tolerance_decimal
-    tol_series = pd.Series(best_tol, index=portfolio_index.index)
+    tolerance_decimal = 0.0
+    tol_series = pd.Series(tolerance_decimal, index=portfolio_index.index)
     
-    if annual_drag_pct > 0:
+    if annual_drag > 0:
         daily_drag_factor = (1 - annual_drag_decimal) ** (1/252)
         daily_drag_pct = (1 - daily_drag_factor) * 100
-        st.write(f"**Portfolio Drag:** {annual_drag_pct:.1f}% annual (≈{daily_drag_pct:.4f}% daily)")
-
-    # Generate signal WITH minimum holding period
+        st.write(f"**Portfolio Drag:** {annual_drag:.1f}% annual (≈{daily_drag_pct:.4f}% daily)")
+    
     sig = generate_testfol_signal_vectorized(
         portfolio_index,
         opt_ma,
         tol_series,
-        min_holding_days=min_holding_days
+        min_holding_days=min_days
     )
     
-    # Run backtest with user parameters
     best_result = backtest(prices, sig, risk_on_weights, risk_off_weights, FLIP_COST, 
                           ma_flip_multiplier=3.0, annual_drag_pct=annual_drag_decimal)
     
     latest_signal = sig.iloc[-1]
     current_regime = "Risk On" if latest_signal else "Risk Off"
-
     st.subheader(f"Current 200 Day SMA Regime: {current_regime}")
-
+    
     perf = best_result["performance"]
-
     switches = sig.astype(int).diff().abs().sum()
     trades_per_year = switches / (len(sig) / 252) if len(sig) > 0 else 0
-
+    
     simple_rets = prices.pct_change().fillna(0)
-
     risk_on_simple = pd.Series(0.0, index=simple_rets.index)
     for a, w in risk_on_weights.items():
         if a in simple_rets.columns:
             risk_on_simple += simple_rets[a] * w
-
-    # Apply drag to risk-on portfolio returns
+    
     if annual_drag_decimal > 0:
         daily_drag_factor = (1 - annual_drag_decimal) ** (1/252)
         risk_on_simple = (1 + risk_on_simple) * daily_drag_factor - 1
-
+    
     risk_on_eq = (1 + risk_on_simple).cumprod()
     risk_on_perf = compute_enhanced_performance(risk_on_simple, risk_on_eq)
-
-    # ============================================================
-    # REAL CALENDAR QUARTER LOGIC BEGINS HERE
-    # ============================================================
-
+    
+    # Calendar quarter logic
     dates = prices.index
-    # ============================================================
-    # TRUE CALENDAR QUARTER-ENDS (academically correct)
-    # ============================================================
-
-    dates = prices.index
-
-    # 1. Generate TRUE calendar quarter-end dates
     true_q_ends = pd.date_range(start=dates.min(), end=dates.max(), freq='Q')
-
-    # 2. Map each to the actual last trading day
     mapped_q_ends = []
     for qd in true_q_ends:
         valid_dates = dates[dates <= qd]
         if len(valid_dates) > 0:
             mapped_q_ends.append(valid_dates.max())
-
+    
     mapped_q_ends = pd.to_datetime(mapped_q_ends)
-
-    # -----------------------------------------------------------
-    # FIXED: TRUE CALENDAR QUARTER LOGIC (never depends on prices)
-    # -----------------------------------------------------------
-
+    
     today_date = pd.Timestamp.today().normalize()
-
-    # 1. Next calendar quarter-end
     true_next_q = pd.date_range(start=today_date, periods=2, freq="Q")[0]
     next_q_end = true_next_q
-
-    # 2. Most recent completed quarter-end
-    true_prev_q = pd.date_range(end=today_date, periods=2, freq="Q")[0]
-    past_q_end = true_prev_q
-
-    # 3. Days remaining until next rebalance
     days_to_next_q = (next_q_end - today_date).days
     
-    # ============================================================
-    # Sigma ENGINE USING REAL CALENDAR QUARTERS
-    # ============================================================
-
-    # Annualized CAGR → quarterly target unchanged
     if len(risk_on_eq) > 0 and risk_on_eq.iloc[0] != 0:
         bh_cagr = (risk_on_eq.iloc[-1] / risk_on_eq.iloc[0]) ** (252 / len(risk_on_eq)) - 1
         quarterly_target = (1 + bh_cagr) ** (1/4) - 1
     else:
         bh_cagr = 0
         quarterly_target = 0
-
+    
     risk_off_daily = pd.Series(0.0, index=simple_rets.index)
     for a, w in risk_off_weights.items():
         if a in simple_rets.columns:
             risk_off_daily += simple_rets[a] * w
-
-    # SIG (always RISK-ON) - 2x flip costs quarterly
+    
     pure_sig_signal = pd.Series(True, index=risk_on_simple.index)
-
+    
     pure_sig_eq, pure_sig_rw, pure_sig_sw, pure_sig_rebals = run_sig_engine(
         risk_on_simple,
         risk_off_daily,
         quarterly_target,
         pure_sig_signal,
         quarter_end_dates=mapped_q_ends,
-        quarterly_multiplier=2.0,  # 2x for SIG
-        ma_flip_multiplier=0.0     # No MA flips for SIG
+        quarterly_multiplier=2.0,
+        ma_flip_multiplier=0.0
     )
-
-    # Sigma (MA Filter) - 2x quarterly + 3x MA flips
+    
     hybrid_eq, hybrid_rw, hybrid_sw, hybrid_rebals = run_sig_engine(
         risk_on_simple,
         risk_off_daily,
         quarterly_target,
-        sig,  # <-- CRITICAL: Uses the SAME optimized signal
+        sig,
         pure_sig_rw=pure_sig_rw,
         pure_sig_sw=pure_sig_sw,
         quarter_end_dates=mapped_q_ends,
-        quarterly_multiplier=2.0,  # 2x quarterly part
-        ma_flip_multiplier=3.0     # 3x when MA flips
+        quarterly_multiplier=2.0,
+        ma_flip_multiplier=3.0
     )
     
-    # ============================================================
-    # CANONICAL STRATEGY PERFORMANCE — Sigma ONLY
-    # ============================================================
     hybrid_simple = hybrid_eq.pct_change().fillna(0)
     hybrid_perf = compute_enhanced_performance(hybrid_simple, hybrid_eq)
     
-    # ============================================================
-    # SINCE-INCEPTION SERIES (Sigma vs Buy & Hold vs QQQ)
-    # ============================================================
-
-    inception = pd.to_datetime(official_inception_date)
-
-    # --- Sigma ---
+    # Since-inception analysis
+    inception = pd.to_datetime(inception_date)
     sigma_eq_si = hybrid_eq.loc[hybrid_eq.index >= inception]
     sigma_ret_si = sigma_eq_si.pct_change().fillna(0)
-
-    # --- Buy & Hold ---
+    
     bh_eq_si = risk_on_eq.loc[risk_on_eq.index >= inception]
     bh_ret_si = bh_eq_si.pct_change().fillna(0)
-
-    # --- Benchmark ---
-    benchmark_px = load_price_data([benchmark_ticker], inception)
-    if not benchmark_px.empty and benchmark_ticker in benchmark_px.columns:
-        benchmark_eq_si = (benchmark_px[benchmark_ticker] / benchmark_px[benchmark_ticker].iloc[0]).reindex(sigma_eq_si.index).ffill()
+    
+    benchmark_px = load_price_data([benchmark], inception)
+    if not benchmark_px.empty and benchmark in benchmark_px.columns:
+        benchmark_eq_si = (benchmark_px[benchmark] / benchmark_px[benchmark].iloc[0]).reindex(sigma_eq_si.index).ffill()
         benchmark_ret_si = benchmark_eq_si.pct_change().fillna(0)
     else:
         benchmark_eq_si = pd.Series(1.0, index=sigma_eq_si.index)
         benchmark_ret_si = pd.Series(0.0, index=sigma_eq_si.index)
-        st.warning(f"Could not load benchmark data for {benchmark_ticker}")
+        st.warning(f"Could not load benchmark data for {benchmark}")
     
-    # ============================================================
-    # SINCE-INCEPTION EQUITY CURVE
-    # ============================================================
-
-    st.subheader(f"Your Performance (Sigma vs Buy & Hold vs {benchmark_ticker})")
-
+    st.subheader(f"Your Performance (Sigma vs Buy & Hold vs {benchmark})")
     fig, ax = plt.subplots(figsize=(12, 6))
-
-    ax.plot(
-        sigma_eq_si / sigma_eq_si.iloc[0],
-        label="Sigma",
-        linewidth=2,
-        color="blue"
-    )
-
-    ax.plot(
-        bh_eq_si / bh_eq_si.iloc[0],
-        label="Buy & Hold",
-        linewidth=2,
-        alpha=0.7
-    )
-
-    ax.plot(
-        benchmark_eq_si,
-        label=benchmark_ticker,
-        linewidth=2,
-        linestyle="--",
-        color="black",
-        alpha=0.7
-    )
-
+    ax.plot(sigma_eq_si / sigma_eq_si.iloc[0], label="Sigma", linewidth=2, color="blue")
+    ax.plot(bh_eq_si / bh_eq_si.iloc[0], label="Buy & Hold", linewidth=2, alpha=0.7)
+    ax.plot(benchmark_eq_si, label=benchmark, linewidth=2, linestyle="--", color="black", alpha=0.7)
     ax.set_ylabel("Growth of $1")
-    ax.set_title(f"Performance Since {official_inception_date}")
+    ax.set_title(f"Performance Since {inception_date}")
     ax.legend()
     ax.grid(alpha=0.3)
-
     st.pyplot(fig)
     
-    # ============================================================
-    # SINCE-INCEPTION PERFORMANCE METRICS TABLE
-    # ============================================================
-
     sigma_perf_si = compute_enhanced_performance(sigma_ret_si, sigma_eq_si)
-    bh_perf_si    = compute_enhanced_performance(bh_ret_si, bh_eq_si)
+    bh_perf_si = compute_enhanced_performance(bh_ret_si, bh_eq_si)
     benchmark_perf_si = compute_enhanced_performance(benchmark_ret_si, benchmark_eq_si)
-
+    
+    def fmt(val, kind):
+        if pd.isna(val):
+            return "—"
+        if kind == "pct":
+            return f"{val:.2%}"
+        return f"{val:.3f}"
+    
     rows = [
         ("CAGR", "CAGR", "pct"),
         ("Volatility", "Volatility", "pct"),
@@ -1386,36 +950,21 @@ def main():
         ("Max Drawdown", "MaxDrawdown", "pct"),
         ("Total Return", "TotalReturn", "pct"),
     ]
-
-    def fmt(val, kind):
-        if pd.isna(val):
-            return "—"
-        if kind == "pct":
-            return f"{val:.2%}"
-        return f"{val:.3f}"
-
+    
     table_data = []
     for label, key, kind in rows:
         table_data.append([
             label,
             fmt(sigma_perf_si[key], kind),
             fmt(bh_perf_si[key], kind),
-            fmt(benchmark_perf_si[key], kind),  # ← CHANGED
+            fmt(benchmark_perf_si[key], kind),
         ])
-
-    si_table = pd.DataFrame(
-        table_data,
-        columns=["Metric", "Sigma", "Buy & Hold", benchmark_ticker]
-    )
-
+    
+    si_table = pd.DataFrame(table_data, columns=["Metric", "Sigma", "Buy & Hold", benchmark])
     st.dataframe(si_table, use_container_width=True)
     
-    # IMPORTANT: `perf` always means Sigma performance
     perf = hybrid_perf
     
-    # ============================================================
-    # DISPLAY ACTUAL Sigma REBALANCE DATES (FULL HISTORY)
-    # ============================================================
     if len(hybrid_rebals) > 0:
         reb_df = pd.DataFrame({"Rebalance Date": pd.to_datetime(hybrid_rebals)})
         st.subheader("Sigma System – Historical Rebalance Dates")
@@ -1423,23 +972,20 @@ def main():
     else:
         st.subheader("Sigma – Historical Rebalance Dates")
         st.write("No Sigma rebalances occurred during the backtest.")
-
-    # Quarter start should follow the last actual SIG rebalance
+    
     if len(hybrid_rebals) > 0:
         quarter_start_date = hybrid_rebals[-1]
     else:
         quarter_start_date = dates[0] if len(dates) > 0 else None
-
+    
     st.subheader("Strategy Implementation Summary")
-    # Display last actual SIG rebalance instead of quarter start
     if len(hybrid_rebals) > 0:
         last_reb = hybrid_rebals[-1]
         st.write(f"**Last Rebalance:** {last_reb.strftime('%Y-%m-%d')}")
     else:
         st.write("**Quarter start (last SIG rebalance):** None yet")
     st.write(f"**Next Rebalance:** {next_q_end.date()} ({days_to_next_q} days)")
-
-    # Quarter-progress calculations - only ONE portfolio now
+    
     def get_sig_progress(qs_cap, today_cap):
         if quarter_start_date is not None and len(hybrid_rw) > 0:
             risky_start = qs_cap * float(hybrid_rw.loc[quarter_start_date])
@@ -1447,39 +993,35 @@ def main():
             return compute_quarter_progress(risky_start, risky_today, quarterly_target)
         else:
             return compute_quarter_progress(0, 0, 0)
-
+    
     prog_1 = get_sig_progress(qs_cap_1, real_cap_1)
-
     st.write(f"**Quarterly Target Growth Rate:** {quarterly_target:.2%}")
-
+    
     prog_df = pd.DataFrame.from_dict(prog_1, orient='index', columns=['Portfolio'])
-
     prog_df.loc["Gap (%)"] = prog_df.loc["Gap (%)"].apply(lambda x: f"{x:.2%}")
     st.dataframe(prog_df)
-
+    
     st.markdown("### Rebalance Recommendations")
-
     gap = prog_1['Gap ($)']
     date_str = next_q_end.strftime("%m/%d/%Y")
     days_str = f"{days_to_next_q} days"
     dollar_amount = f"\${abs(gap):,.2f}"
-
+    
     if gap > 0:
-        # Use Markdown bold syntax **text** instead of HTML
         message = f"**Portfolio:** **Sell {dollar_amount}** of the Risk Off Allocation and **Buy {dollar_amount}** of the Risk On Allocation on **{date_str}** ({days_str})"
     elif gap < 0:
         message = f"**Portfolio:** **Sell {dollar_amount}** of the Risk On Allocation and **Buy {dollar_amount}** of Risk Off Allocation on **{date_str}** ({days_str})"
     else:
         message = f"**Portfolio:** No rebalance needed until **{date_str}** ({days_str})"
-
+    
     st.markdown(message)
-
-    # ENHANCED ADVANCED METRICS
+    
+    # Performance metrics
     def time_in_drawdown(dd): return (dd < 0).mean() if len(dd) > 0 else 0
     def mar(c, dd): return c / abs(dd) if dd != 0 else 0
     def ulcer(dd): return np.sqrt((dd**2).mean()) if len(dd) > 0 and (dd**2).mean() != 0 else 0
     def pain_gain(c, dd): return c / ulcer(dd) if ulcer(dd) != 0 else 0
-
+    
     def compute_stats(perf, returns, dd, flips, tpy):
         return {
             "CAGR": perf["CAGR"],
@@ -1504,49 +1046,20 @@ def main():
             "Kurtosis": perf["Kurtosis"],
             "Trades/year": tpy,
         }
-
+    
     hybrid_simple = hybrid_eq.pct_change().fillna(0) if len(hybrid_eq) > 0 else pd.Series([], dtype=float)
     hybrid_perf = compute_enhanced_performance(hybrid_simple, hybrid_eq)
     
     pure_sig_simple = pure_sig_eq.pct_change().fillna(0) if len(pure_sig_eq) > 0 else pd.Series([], dtype=float)
     pure_sig_perf = compute_enhanced_performance(pure_sig_simple, pure_sig_eq)
-
-    # MA STRATEGY STATS (signal diagnostics ONLY)
+    
     ma_perf = best_result["performance"]
-
-    strat_stats = compute_stats(
-        ma_perf,
-        best_result["returns"],
-        ma_perf["DD_Series"],
-        best_result["flip_mask"],
-        trades_per_year,
-    )
-
-    risk_stats = compute_stats(
-        risk_on_perf,
-        risk_on_simple,
-        risk_on_perf["DD_Series"],
-        np.zeros(len(risk_on_simple), dtype=bool) if len(risk_on_simple) > 0 else np.array([], dtype=bool),
-        0,
-    )
-
-    hybrid_stats = compute_stats(
-        hybrid_perf,
-        hybrid_simple,
-        hybrid_perf["DD_Series"],
-        np.zeros(len(hybrid_simple), dtype=bool) if len(hybrid_simple) > 0 else np.array([], dtype=bool),
-        0,
-    )
-
-    pure_sig_stats = compute_stats(
-        pure_sig_perf,
-        pure_sig_simple,
-        pure_sig_perf["DD_Series"],
-        np.zeros(len(pure_sig_simple), dtype=bool) if len(pure_sig_simple) > 0 else np.array([], dtype=bool),
-        0,
-    )
-
-    # ENHANCED STAT TABLE WITH NEW METRICS
+    
+    strat_stats = compute_stats(ma_perf, best_result["returns"], ma_perf["DD_Series"], best_result["flip_mask"], trades_per_year)
+    risk_stats = compute_stats(risk_on_perf, risk_on_simple, risk_on_perf["DD_Series"], np.zeros(len(risk_on_simple), dtype=bool) if len(risk_on_simple) > 0 else np.array([], dtype=bool), 0)
+    hybrid_stats = compute_stats(hybrid_perf, hybrid_simple, hybrid_perf["DD_Series"], np.zeros(len(hybrid_simple), dtype=bool) if len(hybrid_simple) > 0 else np.array([], dtype=bool), 0)
+    pure_sig_stats = compute_stats(pure_sig_perf, pure_sig_simple, pure_sig_perf["DD_Series"], np.zeros(len(pure_sig_simple), dtype=bool) if len(pure_sig_simple) > 0 else np.array([], dtype=bool), 0)
+    
     st.subheader("Backtest: All Strategies Performance Statistics")
     rows = [
         ("CAGR", "CAGR"),
@@ -1571,51 +1084,41 @@ def main():
         ("Kurtosis", "Kurtosis"),
         ("Trades per year", "Trades/year"),
     ]
-
+    
     def fmt_pct(x): return f"{x:.2%}" if pd.notna(x) else "—"
     def fmt_dec(x): return f"{x:.3f}" if pd.notna(x) else "—"
     def fmt_num(x): return f"{x:,.2f}" if pd.notna(x) else "—"
-
+    
     table_data = []
     for label, key in rows:
         sv = strat_stats.get(key, np.nan)
         rv = risk_stats.get(key, np.nan)
         hv = hybrid_stats.get(key, np.nan)
         ps = pure_sig_stats.get(key, np.nan)
-
+        
         if key in ["CAGR", "Volatility", "MaxDD", "Total", "WinRate", "VaR_95", "CVaR_95", "TID"]:
             row = [label, fmt_pct(sv), fmt_pct(rv), fmt_pct(hv), fmt_pct(ps)]
         elif key in ["Sharpe", "Sortino", "Calmar", "Omega", "ProfitFactor", "Skew", "Kurtosis", "UlcerIndex", "RecoveryFactor", "TailRatio", "PainGain", "MAR"]:
             row = [label, fmt_dec(sv), fmt_dec(rv), fmt_dec(hv), fmt_dec(ps)]
         else:
             row = [label, fmt_num(sv), fmt_num(rv), fmt_num(hv), fmt_num(ps)]
-
+        
         table_data.append(row)
-
-    stat_table = pd.DataFrame(
-        table_data,
-        columns=[
-            "Metric",
-            "MA",
-            "Buy & Hold",
-            "Sigma",
-            "SIG",
-        ],
-    )
-
+    
+    stat_table = pd.DataFrame(table_data, columns=["Metric", "MA", "Buy & Hold", "Sigma", "SIG"])
     st.dataframe(stat_table, use_container_width=True)
-
-    # ALLOCATION TABLES (unchanged)
+    
+    # Allocation tables
     def compute_allocations(account_value, risky_w, safe_w, ron_w, roff_w):
         risky_dollars = account_value * risky_w
-        safe_dollars  = account_value * safe_w
+        safe_dollars = account_value * safe_w
         alloc = {"Total Risky $": risky_dollars, "Total Safe $": safe_dollars}
         for t, w in ron_w.items():
             alloc[t] = risky_dollars * w
         for t, w in roff_w.items():
             alloc[t] = safe_dollars * w
         return alloc
-
+    
     def add_pct(df_dict):
         out = pd.DataFrame.from_dict(df_dict, orient="index", columns=["$"])
         if "Total Risky $" in out.index and "Total Safe $" in out.index:
@@ -1625,45 +1128,38 @@ def main():
         total = out["$"].sum()
         out["% Portfolio"] = (out["$"] / total * 100).apply(lambda x: f"{x:.2f}%")
         return out
-
+    
     st.subheader("Portfolio Allocations")
-
     hyb_r = float(hybrid_rw.iloc[-1]) if len(hybrid_rw) > 0 else 0
     hyb_s = float(hybrid_sw.iloc[-1]) if len(hybrid_sw) > 0 else 0
-
     pure_r = float(pure_sig_rw.iloc[-1]) if len(pure_sig_rw) > 0 else 0
     pure_s = float(pure_sig_sw.iloc[-1]) if len(pure_sig_sw) > 0 else 0
-
     latest_signal = sig.iloc[-1] if len(sig) > 0 else False
-
+    
     tab1, tab2, tab3 = st.tabs(["Sigma", "SIG", "200 Day SMA"])
-
     with tab1:
-        st.write(f"### Portfolio — Sigma")
+        st.write("### Portfolio — Sigma")
         st.dataframe(add_pct(compute_allocations(real_cap_1, hyb_r, hyb_s, risk_on_weights, risk_off_weights)))
-
     with tab2:
-        st.write(f"### Portfolio — SIG")
+        st.write("### Portfolio — SIG")
         st.dataframe(add_pct(compute_allocations(real_cap_1, pure_r, pure_s, risk_on_weights, risk_off_weights)))
-
     with tab3:
-        st.write(f"### Portfolio — 200 Day SMA")
+        st.write("### Portfolio — 200 Day SMA")
         if latest_signal:
             ma_alloc = compute_allocations(real_cap_1, 1.0, 0.0, risk_on_weights, {"SHY": 0})
         else:
             ma_alloc = compute_allocations(real_cap_1, 0.0, 1.0, {}, risk_off_weights)
         st.dataframe(add_pct(ma_alloc))
-
-    # MA Distance (unchanged)
+    
+    # MA distance
     st.subheader("Next 200 Day SMA Crossover Distance")
     if len(opt_ma) > 0 and len(portfolio_index) > 0:
         latest_date = opt_ma.dropna().index[-1]
         P = float(portfolio_index.loc[latest_date])
         MA = float(opt_ma.loc[latest_date])
-
-        upper = MA * (1 + best_tol)
-        lower = MA * (1 - best_tol)
-
+        upper = MA * (1 + tolerance_decimal)
+        lower = MA * (1 - tolerance_decimal)
+        
         if latest_signal:
             delta = (P - lower) / P
             st.write(f"**Drop Required for Crossover:** {delta:.2%}")
@@ -1672,60 +1168,50 @@ def main():
             st.write(f"**Gain Required for Crossover:** {delta:.2%}")
     else:
         st.write("**Insufficient data for MA distance calculation**")
-
-    # Regime stats plot (unchanged)
-    st.subheader(" 200 Day SMA Crossover Statistics")
+    
+    # Regime stats
+    st.subheader("200 Day SMA Crossover Statistics")
     if len(sig) > 0:
         sig_int = sig.astype(int)
         flips = sig_int.diff().fillna(0).ne(0)
-
         segments = []
         current = sig_int.iloc[0]
         seg_start = sig_int.index[0]
-
+        
         for date, sw in flips.iloc[1:].items():
             if sw:
                 segments.append((current, seg_start, date))
                 current = sig_int.loc[date]
                 seg_start = date
-
+        
         segments.append((current, seg_start, sig_int.index[-1]))
-
         regime_rows = []
         for r, s, e in segments:
-            regime_rows.append([
-                "Risk On" if r == 1 else "Risk Off",
-                s.date(), e.date(),
-                (e - s).days
-            ])
-
+            regime_rows.append(["Risk On" if r == 1 else "Risk Off", s.date(), e.date(), (e - s).days])
+        
         regime_df = pd.DataFrame(regime_rows, columns=["Regime", "Start", "End", "Duration (days)"])
         st.dataframe(regime_df)
-
+        
         on_durations = regime_df[regime_df['Regime']=='Risk On']['Duration (days)']
         off_durations = regime_df[regime_df['Regime']=='Risk Off']['Duration (days)']
-        
         st.write(f"**Average Risk On duration:** {on_durations.mean():.1f} days" if len(on_durations) > 0 else "**Avg Risk On duration:** 0 days")
         st.write(f"**Average Risk Off duration:** {off_durations.mean():.1f} days" if len(off_durations) > 0 else "**Avg Risk Off duration:** 0 days")
     else:
         st.write("No 200 Day SMA Crossover data available")
-
-    st.markdown("---")  # Separator before final plot
-
-    # Final Performance Plot (updated with Buy & Hold with rebalance)
+    
+    st.markdown("---")
+    
+    # Final performance plot
     st.subheader("All Strategy Performance Visual")
-
     plot_index = build_portfolio_index(prices, risk_on_weights, annual_drag_pct=annual_drag_decimal)
     plot_ma = compute_ma(plot_index, best_len, best_type)
-
     plot_index_norm = normalize(plot_index)
     plot_ma_norm = normalize(plot_ma.dropna()) if len(plot_ma.dropna()) > 0 else pd.Series([], dtype=float)
-
-    strat_eq_norm  = normalize(best_result["equity_curve"])
+    strat_eq_norm = normalize(best_result["equity_curve"])
     hybrid_eq_norm = normalize(hybrid_eq) if len(hybrid_eq) > 0 else pd.Series([], dtype=float)
-    pure_sig_norm  = normalize(pure_sig_eq) if len(pure_sig_eq) > 0 else pd.Series([], dtype=float)
-    risk_on_norm   = normalize(risk_on_eq) if len(risk_on_eq) > 0 else pd.Series([], dtype=float)
-
+    pure_sig_norm = normalize(pure_sig_eq) if len(pure_sig_eq) > 0 else pd.Series([], dtype=float)
+    risk_on_norm = normalize(risk_on_eq) if len(risk_on_eq) > 0 else pd.Series([], dtype=float)
+    
     if len(strat_eq_norm) > 0:
         fig, ax = plt.subplots(figsize=(12, 6))
         ax.plot(strat_eq_norm, label="MA", linewidth=2)
@@ -1737,89 +1223,47 @@ def main():
             ax.plot(pure_sig_norm, label="SIG", linewidth=2, color="orange")
         if len(plot_ma_norm) > 0:
             ax.plot(plot_ma_norm, label="200-day SMA", linestyle="--", color="black", alpha=0.6)
-
+        
         ax.legend()
         ax.grid(alpha=0.3)
         st.pyplot(fig)
     else:
         st.info("Insufficient data for performance plot")
-
-    # ============================================================
-    # STRATEGY DIAGNOSTICS
-    # ============================================================
-
+    
+    # Strategy diagnostics
     st.subheader("Sigma System Diagnostics")
-
-    diag_fig = plot_diagnostics(
-        hybrid_eq = hybrid_eq,
-        bh_eq     = risk_on_eq,
-        hybrid_signal = sig
-    )
-
+    diag_fig = plot_diagnostics(hybrid_eq=hybrid_eq, bh_eq=risk_on_eq, hybrid_signal=sig)
     st.pyplot(diag_fig)
-
-    # ============================================================
-    # MONTE CARLO STRESS TESTING - 12-MONTH FORECAST (CORRECTED)
-    # ============================================================
     
+    # Monte Carlo
     st.subheader("Monte Carlo Stress Testing - Next 12-Month Simulation")
-    
-    # Get total current portfolio value from user inputs - only ONE portfolio now
     total_current_portfolio = real_cap_1
-    
-    # Prepare strategy data for Monte Carlo with user's actual portfolio value
     strategies_mc = {
-        "MA Strategy": {
-            "returns": best_result["returns"],
-            "equity": best_result["equity_curve"],
-            "initial_capital": total_current_portfolio
-        },
-        "Buy & Hold": {
-            "returns": risk_on_simple,
-            "equity": risk_on_eq,
-            "initial_capital": total_current_portfolio
-        },
-        "Sigma": {
-            "returns": hybrid_simple,
-            "equity": hybrid_eq,
-            "initial_capital": total_current_portfolio
-        },
-        "SIG": {
-            "returns": pure_sig_simple,
-            "equity": pure_sig_eq,
-            "initial_capital": total_current_portfolio
-        }
+        "MA Strategy": {"returns": best_result["returns"], "equity": best_result["equity_curve"], "initial_capital": total_current_portfolio},
+        "Buy & Hold": {"returns": risk_on_simple, "equity": risk_on_eq, "initial_capital": total_current_portfolio},
+        "Sigma": {"returns": hybrid_simple, "equity": hybrid_eq, "initial_capital": total_current_portfolio},
+        "SIG": {"returns": pure_sig_simple, "equity": pure_sig_eq, "initial_capital": total_current_portfolio}
     }
     
-    # Run Monte Carlo for each strategy
     mc_results = {}
     with st.spinner("Running Monte Carlo simulations (100,000 paths each)..."):
         for name, data in strategies_mc.items():
-            if len(data["returns"]) > 100:  # Need sufficient data
+            if len(data["returns"]) > 100:
                 mc_results[name] = monte_carlo_strategy_analysis(
-                    data["returns"],
-                    data["equity"],
-                    n_sim=100000,
-                    periods=252,
-                    initial_capital=data["initial_capital"]
+                    data["returns"], data["equity"], n_sim=100000, periods=252, initial_capital=data["initial_capital"]
                 )
             else:
                 mc_results[name] = None
     
-    # Display portfolio value info
     st.write(f"**Current Total Portfolio Value:** ${total_current_portfolio:,.2f}")
     st.write(f"**Monte Carlo Simulation Horizon:** 12 months (252 trading days)")
     st.write(f"**Number of Simulations:** 100,000 per strategy")
     
-    # Display Monte Carlo results
     if any(v is not None for v in mc_results.values()):
-        # Create visualization
         mc_fig = plot_monte_carlo_results(mc_results, list(strategies_mc.keys()))
         st.pyplot(mc_fig)
         
-        # Display terminal value projections
-        st.subheader(" Next 12-Month Simulated-Value ")
-        
+        st.subheader("Next 12-Month Simulated-Value")
         terminal_value_data = []
         for name, results in mc_results.items():
             if results is not None:
@@ -1838,9 +1282,7 @@ def main():
             terminal_value_df = pd.DataFrame(terminal_value_data)
             st.dataframe(terminal_value_df, use_container_width=True)
         
-        # Display return projections
         st.subheader("Next 12-Month Simulated-Returns(%)")
-        
         return_data = []
         for name, results in mc_results.items():
             if results is not None:
@@ -1860,30 +1302,22 @@ def main():
             return_df = pd.DataFrame(return_data)
             st.dataframe(return_df, use_container_width=True)
             
-            # Key insights
             st.subheader("Key Insights from Monte Carlo")
-            
             col1, col2, col3 = st.columns(3)
-            
-            # Find strategies with valid results
             valid_results = [(name, r) for name, r in mc_results.items() if r is not None]
             
             if valid_results:
                 with col1:
                     safest = min(valid_results, key=lambda x: x[1]['cvar_95'])
                     st.metric("Most Conservative", safest[0])
-                
                 with col2:
                     highest_return = max(valid_results, key=lambda x: x[1]['expected_return'])
                     st.metric("Highest Expected Return", highest_return[0])
-                
                 with col3:
                     highest_prob = max(valid_results, key=lambda x: x[1]['prob_positive'])
                     st.metric("Highest Probability of Positive Return", highest_prob[0])
                     
-                    # Worst-case scenario analysis
                     st.write("#### Worst-Case Scenario Analysis (12-Month Horizon)")
-                    
                     worst_cases = []
                     for name, results in valid_results:
                         worst_5 = np.percentile(results['terminal_returns'], 5)
@@ -1903,7 +1337,14 @@ def main():
                         "Average in Worst 5% (CVaR 95%)": "{:.2%}",
                         "Average in Worst 1% (CVaR 99%)": "{:.2%}"
                     }), use_container_width=True)
-                    
+
+# ============================================================
+# SECURE KEY GENERATION FOR DEPLOYMENT
+# ============================================================
+# IMPORTANT: For deployment to Streamlit Cloud, UNCOMMENT this line:
+# st.write(f"🔐 Copy this to config.yaml: {os.urandom(32).hex()}")
+# Then copy the key it shows and paste it in config.yaml replacing "temporary-key-change-later-123"
+# Then REMOVE this line from the code
 
 # ============================================================
 # LAUNCH APP

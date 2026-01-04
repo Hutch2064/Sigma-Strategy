@@ -114,8 +114,8 @@ class PortfolioPreferences:
             "benchmark_ticker": "QQQ",
             "ma_type": "SMA",
             "ma_length": 200,  # Fixed at 200
-            "tolerance_pct": 0.5,
-            "min_holding_days": 5,  # New: Minimum holding period after regime change
+            "tolerance_pct": 0.0,
+            "min_holding_days": 2,  # New: Minimum holding period after regime change
         } 
     
     
@@ -994,6 +994,12 @@ def main():
     # Start date with saved preference
     start = st.sidebar.text_input("Backtest Start Date", user_prefs["start_date"])
     
+    # SET FIXED MA PARAMETERS
+    	ma_type = "SMA"
+    	ma_length = 200
+    	tolerance_pct = 0.0
+    	tolerance_decimal = 0.0
+    
     # End date with saved preference
     end = st.sidebar.text_input("End Date (optional)", user_prefs["end_date"])
 
@@ -1051,42 +1057,24 @@ def main():
     )
     annual_drag_decimal = annual_drag_pct / 100.0
     
-    # MOVING AVERAGE PARAMETERS - MA IS FIXED AT 200
-    st.sidebar.header("Moving Average Parameters")
+    # MOVING AVERAGE PARAMETERS - FIXED IN BACKGROUND
+    		# MA is always 200-day SMA with 0% tolerance
+    		ma_type = "SMA"
+    		ma_length = 200
+    		tolerance_pct = 0.0
+    		tolerance_decimal = 0.0
     
-    ma_type = st.sidebar.selectbox(
-        "MA Type",
-        ["SMA", "EMA"],
-        index=0 if user_prefs["ma_type"] == "SMA" else 1,
-        help="Simple Moving Average or Exponential Moving Average"
-    )
-    
-    # Display MA length as fixed at 200
-    st.sidebar.write(f"**MA Length:** 200 days (Fixed)")
-    ma_length = 200  # Always fixed at 200
-    
-    # Tolerance parameter
-    tolerance_pct = st.sidebar.slider(
-        "Tolerance (%)",
-        min_value=0.0,
-        max_value=10.0,
-        value=float(user_prefs["tolerance_pct"]),
-        step=0.1,
-        help="Tolerance band around MA for signal generation"
-    )
-    tolerance_decimal = tolerance_pct / 100.0
-    
-    # MINIMUM HOLDING PERIOD
-    min_holding_days = st.sidebar.slider(
-        "Minimum Holding Period (days)",
-        min_value=0,
-        max_value=30,
-        value=int(user_prefs["min_holding_days"]),
-        step=1,
-        help="Minimum days to hold after a regime change. Prevents excessive trading."
-    )
+    		# MINIMUM HOLDING PERIOD
+    		min_holding_days = st.sidebar.number_input(
+        		"Minimum Holding Period (days)",
+        		min_value=0,
+        		max_value=365,
+        		value=int(user_prefs["min_holding_days"]),
+        		step=1,
+        		help="Minimum days to hold after a regime change. Prevents excessive trading."
+    		)
 
-    st.sidebar.header("Quarterly Portfolio Values")
+    	st.sidebar.header("Quarterly Portfolio Values")
     # Portfolio values with saved preferences - only ONE portfolio now
     qs_cap_1 = st.sidebar.number_input("Portfolio Value at Last Rebalance ($)", 
                                        min_value=0.0, 
@@ -1100,11 +1088,11 @@ def main():
                                          value=float(user_prefs["real_cap_1"]), 
                                          step=100.0)
 
+
     # Display current parameters
     st.sidebar.header("Current Parameters")
-    st.sidebar.write(f"**MA Type:** {ma_type}")
-    st.sidebar.write(f"**MA Length:** {ma_length} days (Fixed)")
-    st.sidebar.write(f"**Tolerance:** {tolerance_pct:.1f}%")
+    st.sidebar.write(f"**MA:** 200-day SMA (Fixed)")
+    st.sidebar.write(f"**Tolerance:** 0% (Fixed)")
     st.sidebar.write(f"**Minimum Holding Period:** {min_holding_days} days")
     st.sidebar.write(f"**Portfolio Drag:** {annual_drag_pct:.1f}% annual")
     
@@ -1135,9 +1123,9 @@ def main():
                 "end_date": end,
                 "official_inception_date": official_inception_date,
                 "benchmark_ticker": benchmark_ticker,
-                "ma_type": ma_type,
-                "ma_length": ma_length,  # Fixed at 200
-                "tolerance_pct": tolerance_pct,
+                "ma_type": "SMA",
+                "ma_length": 200,  # Fixed at 200
+                "tolerance_pct": 0.0,
                 "min_holding_days": min_holding_days,  # New parameter
             }
             
@@ -1186,7 +1174,7 @@ def main():
     
     # MA IS FIXED AT 200
     best_len = 200  # Always fixed
-    best_type = ma_type.lower()  # Convert to lowercase for internal use
+    best_type = "sma"  # Always SMA
     
     # Generate signal with user parameters including minimum holding period
     portfolio_index = build_portfolio_index(prices, risk_on_weights, annual_drag_pct=annual_drag_decimal)
@@ -1202,11 +1190,11 @@ def main():
     tol_series = pd.Series(best_tol, index=portfolio_index.index)
 
     st.write(
-        f"**MA Type:** {ma_type}  —  "
-        f"**Length:** {best_len} days (Fixed) —  "
-        f"**Tolerance:** {best_tol:.2%} —  "
+        f"**MA:** 200-day SMA (Fixed) — "
+        f"**Tolerance:** 0% (Fixed) — "
         f"**Minimum Holding Period:** {min_holding_days} days"
     )
+    
     if annual_drag_pct > 0:
         daily_drag_factor = (1 - annual_drag_decimal) ** (1/252)
         daily_drag_pct = (1 - daily_drag_factor) * 100
@@ -1776,7 +1764,7 @@ def main():
         if len(pure_sig_norm) > 0:
             ax.plot(pure_sig_norm, label="SIG", linewidth=2, color="orange")
         if len(plot_ma_norm) > 0:
-            ax.plot(plot_ma_norm, label=f"MA({best_len}) {ma_type}", linestyle="--", color="black", alpha=0.6)
+            ax.plot(plot_ma_norm, label="200-day SMA", linestyle="--", color="black", alpha=0.6)
 
         ax.legend()
         ax.grid(alpha=0.3)

@@ -733,22 +733,22 @@ def main():
     
     # Save button
     if st.sidebar.button("💾 Save Settings", type="primary"):
-    st.session_state.prefs = {
-        "start_date": start,
-        "risk_on_tickers": risk_on_tickers_str,
-        "risk_on_weights": risk_on_weights_str,
-        "risk_off_tickers": risk_off_tickers_str,
-        "risk_off_weights": risk_off_weights_str,
-        "annual_drag_pct": annual_drag,
-        "qs_cap_1": qs_cap_1,
-        "real_cap_1": real_cap_1,
-        "end_date": "",
-        "official_inception_date": inception_date,
-        "benchmark_ticker": benchmark,
-        "min_holding_days": min_days,
-    }
-    save_user_prefs(username, st.session_state.prefs)
-    st.sidebar.success("Settings saved permanently")
+        st.session_state.prefs = {
+            "start_date": start,
+            "risk_on_tickers": risk_on_tickers_str,
+            "risk_on_weights": risk_on_weights_str,
+            "risk_off_tickers": risk_off_tickers_str,
+            "risk_off_weights": risk_off_weights_str,
+            "annual_drag_pct": annual_drag,
+            "qs_cap_1": qs_cap_1,
+            "real_cap_1": real_cap_1,
+            "end_date": "",
+            "official_inception_date": inception_date,
+            "benchmark_ticker": benchmark,
+            "min_holding_days": min_days,
+        }
+        save_user_prefs(username, st.session_state.prefs)
+        st.sidebar.success("Settings saved permanently")
     
     run_clicked = st.sidebar.button("🚀 Run Analysis", type="secondary")
     

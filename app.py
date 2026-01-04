@@ -1467,7 +1467,7 @@ def main():
     gap = prog_1['Gap ($)']
     date_str = next_q_end.strftime("%m/%d/%Y")
     days_str = f"{days_to_next_q} days"
-    dollar_amount = f"${abs(gap):,.2f}"
+    dollar_amount = f"\${abs(gap):,.2f}"
 
     if gap > 0:
         # Use Markdown bold syntax **text** instead of HTML

@@ -1059,10 +1059,10 @@ def main():
     
     # MOVING AVERAGE PARAMETERS - FIXED IN BACKGROUND
     	# MA is always 200-day SMA with 0% tolerance
-    	ma_type = "SMA"
-    	ma_length = 200
-    	tolerance_pct = 0.0
-    	tolerance_decimal = 0.0
+    		ma_type = "SMA"
+    		ma_length = 200
+    		tolerance_pct = 0.0
+    		tolerance_decimal = 0.0
     
     	# MINIMUM HOLDING PERIOD
     	min_holding_days = st.sidebar.number_input(

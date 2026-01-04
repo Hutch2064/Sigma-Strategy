@@ -7,5 +7,3 @@ cookie:
   key: "temporary-key-change-later-123"
   expiry_days: 30
 
-preauthorized:
-  emails: []

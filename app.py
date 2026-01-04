@@ -182,12 +182,22 @@ def send_email_simple(to_email: str, subject: str, html_body: str):
             st.warning("Email not configured. Please set SMTP environment variables.")
             return False
             
-        msg = MIMEMultipart('alternative')
-        msg['Subject'] = subject
-        msg['From'] = from_email
-        msg['To'] = to_email
-        
-        html_part = MIMEText(html_body, 'html')
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = from_email
+        msg["To"] = to_email
+
+        # Plain-text fallback (VERY important for Gmail)
+        text_part = MIMEText(
+            "This email was sent to verify your Sigma System account. "
+            "If you did not create an account, you can ignore this email.",
+            "plain",
+        )
+
+        # HTML version (existing content)
+        html_part = MIMEText(html_body, "html")
+
+        msg.attach(text_part)
         msg.attach(html_part)
         
         with smtplib.SMTP(smtp_server, smtp_port) as server:
@@ -1006,16 +1016,20 @@ def main():
                             
                             # Send verification email
                             email_sent = send_email_simple(
-                                new_email,
-                                "Verify Your Email - Portfolio Strategy App",
-                                f"""
-                                <h3>Welcome to Portfolio Strategy App!</h3>
-                                <p>Please verify your email by clicking the link below:</p>
-                                <p><a href="{verify_link}">Verify Email Address</a></p>
-                                <p>This link will expire in 60 minutes.</p>
-                                <p>If you didn't create an account, you can ignore this email.</p>
-                                """
-                            )
+                                            new_email,
+                                            "Verify Your Email - Portfolio Strategy App",
+                                            f"""
+                                            <p style="font-size:12px;color:#666;">
+                                                This is a transactional email to verify your Sigma System account.
+                                            </p>
+
+                                            <h3>Welcome to Sigma System</h3>
+                                            <p>Please verify your email by clicking the link below:</p>
+                                            <p><a href="{verify_link}">Verify Email Address</a></p>
+
+                                            <p>If you did not create this account, you can safely ignore this email.</p>
+                                            """
+                                        )
                             
                             if email_sent:
                                 st.success("✅ Account created! Please check your email to verify your account.")

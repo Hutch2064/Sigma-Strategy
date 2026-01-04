@@ -57,8 +57,8 @@ if not st.session_state.authenticated:
             if login_username in config['credentials']['usernames']:
                 stored_password = config['credentials']['usernames'][login_username]['password']
                 
-                # FIX: Simple password verification (remove hash complexity)
-                if login_password == stored_password:  # Temporary test password
+                # SECURE: Verify hashed password
+                if stauth.Hasher([login_password]).verify(stored_password):
                     st.session_state.authenticated = True
                     st.session_state.username = login_username
                     st.session_state.name = config['credentials']['usernames'][login_username]['name']
@@ -84,16 +84,18 @@ if not st.session_state.authenticated:
             elif new_user in config['credentials']['usernames']:
                 st.error("Username taken")
             else:
-                # FIX: Store plain password temporarily for testing
+                # SECURE: Hash the password
+                hashed_password = stauth.Hasher([new_pass]).generate()[0]
                 config['credentials']['usernames'][new_user] = {
                     'email': f"{new_user}@example.com",
                     'name': new_name,
-                    'password': new_pass  # Store test password
+                    'password': hashed_password  # Store HASHED password
                 }
+                
                 # Save config
                 with open('config.yaml', 'w') as f:
                     yaml.dump(config, f)
-                st.success("✅ Account created! Please login with password 'password123'.")
+                st.success("Account Created.")
                 st.rerun()
     
     # Stop execution - user must login first

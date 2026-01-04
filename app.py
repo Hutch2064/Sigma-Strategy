@@ -1463,32 +1463,32 @@ def main():
     st.dataframe(prog_df)
 
     def rebalance_text(gap, next_q, days_to_next_q):
-    date_str = next_q.strftime("%m/%d/%Y")
-    days_str = f"{days_to_next_q} days"
+        date_str = next_q.strftime("%m/%d/%Y")
+        days_str = f"{days_to_next_q} days"
 
-    if gap > 0:
-        return (
-            f"<strong>Sell ${gap:,.2f}</strong> of Risk Off Assets "
-            f"and <strong>Buy ${gap:,.2f}</strong> of Risk On Assets "
-            f"on <strong>{date_str}</strong> ({days_str})"
-        )
-    elif gap < 0:
-        gap = abs(gap)
-        return (
-            f"<strong>Sell ${gap:,.2f}</strong> of Risk On Assets "
-            f"and <strong>Buy ${gap:,.2f}</strong> of Risk Off Assets "
-            f"on <strong>{date_str}</strong> ({days_str})"
-        )
-    else:
-        return f"No rebalance needed until <strong>{date_str}</strong> ({days_str})"
+        if gap > 0:
+            return (
+                f"<strong>Sell ${gap:,.2f}</strong> of Risk Off Assets "
+                f"and <strong>Buy ${gap:,.2f}</strong> of Risk On Assets "
+                f"on <strong>{date_str}</strong> ({days_str})"
+            )
+        elif gap < 0:
+            gap = abs(gap)
+            return (
+                f"<strong>Sell ${gap:,.2f}</strong> of Risk On Assets "
+                f"and <strong>Buy ${gap:,.2f}</strong> of Risk Off Assets "
+                f"on <strong>{date_str}</strong> ({days_str})"
+            )
+        else:
+            return f"No rebalance needed until <strong>{date_str}</strong> ({days_str})"
 
-# Then in your display code:
-st.markdown("### Rebalance Recommendations")
+    # Then in your display code:
+    st.markdown("### Rebalance Recommendations")
 
-st.markdown(
-    f"<strong>Portfolio:</strong> {rebalance_text(prog_1['Gap ($)'], next_q_end, days_to_next_q)}",
-    unsafe_allow_html=True
-)
+    st.markdown(
+        f"<strong>Portfolio:</strong> {rebalance_text(prog_1['Gap ($)'], next_q_end, days_to_next_q)}",
+        unsafe_allow_html=True
+    )
 
     # ENHANCED ADVANCED METRICS
     def time_in_drawdown(dd): return (dd < 0).mean() if len(dd) > 0 else 0

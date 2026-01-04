@@ -852,9 +852,13 @@ def main():
     name = st.session_state["name"]
     username = st.session_state["username"]
 
-    
+    # Initialize user preferences if missing
+    if "prefs" not in st.session_state:
+        st.session_state.prefs = load_user_prefs(username)
+
     # User is authenticated at this point
     st.sidebar.title(f"Welcome {name}!")
+
     
     if st.session_state.get("authentication_status"):
         authenticator.logout("Logout", "sidebar")

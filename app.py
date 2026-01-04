@@ -206,11 +206,6 @@ with login_tab:
 
         st.success("If the email exists, a reset link has been sent.")
 
-
-    
-    if authentication_status is False:
-        st.error("Invalid username or password")
-
 with signup_tab:
     st.subheader("Create Account")
 
@@ -221,58 +216,46 @@ with signup_tab:
     new_password_confirm = st.text_input("Confirm Password", type="password")
 
     if st.button("Create Account"):
-    if not new_username or not new_name or not new_email or not new_password:
-        st.error("All fields are required")
+        if not new_username or not new_name or not new_email or not new_password:
+            st.error("All fields are required")
+            st.stop()
+
+        if new_password != new_password_confirm:
+            st.error("Passwords do not match")
+            st.stop()
+
+        if username_exists(new_username):
+            st.error("Username already exists")
+            st.stop()
+
+        if email_exists(new_email):
+            st.error("Email already registered")
+            st.stop()
+
+        create_user(new_username, new_name, new_email, new_password)
+
+        token = create_token(new_username, minutes=60)
+        verify_link = f"{st.secrets['APP_URL']}?verify={token}"
+
+        send_email(
+            new_email,
+            "Verify your email",
+            f"""
+            <p>Welcome to Sigma Strategy.</p>
+            <p>Please verify your email by clicking the link below:</p>
+            <p><a href="{verify_link}">Verify Email</a></p>
+            <p>This link expires in 60 minutes.</p>
+            """
+        )
+
+        st.success("Account created. Check your email to verify before logging in.")
         st.stop()
 
-    if new_password != new_password_confirm:
-        st.error("Passwords do not match")
-        st.stop()
-
-    if username_exists(new_username):
-        st.error("Username already exists")
-        st.stop()
-
-    if email_exists(new_email):
-        st.error("Email already registered")
-        st.stop()
-
-    create_user(new_username, new_name, new_email, new_password)
-
-    token = create_token(new_username, minutes=60)
-    verify_link = f"{st.secrets['APP_URL']}?verify={token}"
-
-    send_email(
-        new_email,
-        "Verify your email",
-        f"""
-        <p>Welcome to Sigma Strategy.</p>
-        <p>Please verify your email by clicking the link below:</p>
-        <p><a href="{verify_link}">Verify Email</a></p>
-        <p>This link expires in 60 minutes.</p>
-        """
-    )
-
-    st.success("Account created. Check your email to verify before logging in.")
-    st.stop()
+    
+    if authentication_status is False:
+        st.error("Invalid username or password")
 
 
-    token = create_token(new_username, minutes=60)
-    verify_link = f"{st.secrets['APP_URL']}?verify={token}"
-
-    send_email(
-        new_email,
-        "Verify your email",
-        f"""
-        <p>Welcome to Sigma Strategy.</p>
-        <p>Please verify your email by clicking the link below:</p>
-        <p><a href="{verify_link}">Verify Email</a></p>
-        <p>This link expires in 60 minutes.</p>
-        """
-    )
-
-    st.success("Account created. Check your email to verify before logging in.")
-    st.stop()
 
         
 if authentication_status is not True:

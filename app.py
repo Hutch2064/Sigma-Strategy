@@ -68,10 +68,10 @@ except TypeError:
                         username = login_username
                         auth_status = True
                         st.success(f"Welcome {name}!")
-                         # Store in session state
-                         st.session_state.auth_name = name
-                         st.session_state.auth_username = username
-                         st.rerun()
+                        # Store in session state
+                        st.session_state.auth_name = name
+                        st.session_state.auth_username = username
+                        st.rerun()
                     else:
                         st.error("Invalid password")
                 else:
@@ -105,17 +105,16 @@ except TypeError:
         # Stop execution here - user needs to login
         st.stop()
 
-# Check authentication status
-# Store authentication in session state
-st.session_state.auth_name = name
-st.session_state.auth_username = username
-
-if auth_status == False:
+# After login logic, check auth_status
+if auth_status:
+    st.session_state.auth_name = name
+    st.session_state.auth_username = username
+    main()
+elif auth_status == False:
     st.error('❌ Wrong username/password')
     st.stop()
-    
-if auth_status == None:
-    # User hasn't logged in yet - show simple signup option
+elif auth_status == None:
+    # Show signup form if using authenticator
     st.write("## 📝 Create Account")
     
     with st.form("signup"):
@@ -1430,5 +1429,5 @@ def main():
 # ============================================================
 
 if __name__ == "__main__":
-    # Pass the name, auth_status, and username to main function
-    main(name, auth_status, username)
+    # No parameters needed - main() gets auth from session state
+    main()

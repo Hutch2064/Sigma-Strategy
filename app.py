@@ -1181,12 +1181,6 @@ def main():
     # Use user-selected tolerance directly
     best_tol = tolerance_decimal
     tol_series = pd.Series(best_tol, index=portfolio_index.index)
-
-    st.write(
-        f"**MA:** 200-day SMA (Fixed) — "
-        f"**Tolerance:** 0% (Fixed) — "
-        f"**Minimum Holding Period:** {min_holding_days} days"
-    )
     
     if annual_drag_pct > 0:
         daily_drag_factor = (1 - annual_drag_decimal) ** (1/252)

@@ -1088,12 +1088,6 @@ def main():
                                          value=float(user_prefs["real_cap_1"]), 
                                          step=100.0)
 
-    # Display current parameters
-    st.sidebar.header("Current Parameters")
-    st.sidebar.write(f"**MA:** 200-day SMA (Fixed)")
-    st.sidebar.write(f"**Tolerance:** 0% (Fixed)")
-    st.sidebar.write(f"**Minimum Holding Period:** {min_holding_days} days")
-    st.sidebar.write(f"**Portfolio Drag:** {annual_drag_pct:.1f}% annual")
     
     st.caption(
         f"**Official Strategy Inception Date:** {official_inception_date} "

@@ -1,5 +1,5 @@
 streamlit
-streamlit-authenticator
+streamlit-authenticator==0.2.2  # Or the latest version
 yfinance
 pandas
 numpy

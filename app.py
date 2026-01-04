@@ -25,7 +25,7 @@ An automated program that integrates the SIG System with the 200 Day Simple Movi
 **Quarterly Target Growth Rate (QTGR):**  
 Quarterly Growth Target (QGT): Quarterly growth rate derived from the historical returns of the user selected Risk On allocation (e.g., 9sig = 9% QGT for TQQQ).
 
-- Is your Risk On Allocation above or below its quarterly growth target? If above, it’s a sell signal. If below, it’s a buy signal.
+- Is your Risk On Allocation above or below its quarterly growth target? If above, it's a sell signal. If below, it's a buy signal.
 - If the signal is a Risk On Allocation sell, you will move proceeds of the sale to your Risk Off Allocation in the following order of events: sell an amount of the Risk On Allocation, use that amount to buy more of the Risk Off Allocation. If the signal is a Risk On Allocation buy, you will generate buying power by selling a portion of your Risk Off Allocation, then use the proceeds to buy more of your Risk On Allocation, in the following order of events: sell a portion of the Risk Off Allocation, use the proceeds to buy the Risk On Allocation.
 ---
 
@@ -46,6 +46,11 @@ A "Risk Off Regime" = 200 Day SMA > Risk On Allocation Index.
 - If the 200 Day SMA < Risk On Allocation Index, then the model runs the SIG System as instructed above.
 - If the 200 Day SMA > Risk On Allocation Index, then the model allocates all portfolio capital to the Risk Off Allocation.
 - When model flips from "Risk Off" to "Risk On", the model refers to the Allocation Tables and resumes the current SIG System weights.
+
+### **New Feature: Minimum Holding Period**
+- After each regime change (Risk-On to Risk-Off or vice versa), the model enforces a minimum holding period.
+- During this period, no further regime changes are allowed.
+- This helps reduce excessive trading and provides stability.
 """)
 
 # ============================================================
@@ -108,8 +113,9 @@ class PortfolioPreferences:
             "official_inception_date": "2025-12-22",
             "benchmark_ticker": "QQQ",
             "ma_type": "SMA",
-            "ma_length": 200,
+            "ma_length": 200,  # Fixed at 200
             "tolerance_pct": 0.5,
+            "min_holding_days": 5,  # New: Minimum holding period after regime change
         } 
     
     
@@ -121,6 +127,8 @@ class PortfolioPreferences:
                     saved_prefs = json.load(f)
                 # Merge with defaults to ensure all keys exist
                 merged_prefs = {**self.default_preferences, **saved_prefs}
+                # Ensure MA length is fixed at 200
+                merged_prefs['ma_length'] = 200
                 return merged_prefs
             except Exception as e:
                 st.warning(f"Could not load saved preferences: {e}")
@@ -131,6 +139,8 @@ class PortfolioPreferences:
     def save_preferences(self, prefs_dict):
         """Save user preferences to file"""
         try:
+            # Ensure MA length is fixed at 200
+            prefs_dict['ma_length'] = 200
             with open(self.prefs_file, 'w') as f:
                 json.dump(prefs_dict, f, indent=4)
             self.preferences = prefs_dict.copy()
@@ -254,10 +264,19 @@ def compute_ma(price_series, length, ma_type):
 
 
 # ============================================================
-# TESTFOL SIGNAL LOGIC - ROBUST VERSION
+# TESTFOL SIGNAL LOGIC - ROBUST VERSION WITH MINIMUM HOLDING PERIOD
 # ============================================================
 
-def generate_testfol_signal_vectorized(price, ma, tol_series):
+def generate_testfol_signal_vectorized(price, ma, tol_series, min_holding_days=5):
+    """
+    Generate regime signals with minimum holding period enforcement.
+    
+    Args:
+        price: Price series
+        ma: Moving average series
+        tol_series: Tolerance series (percentage as decimal)
+        min_holding_days: Minimum days to hold after a regime change
+    """
     px = price.values
     ma_vals = ma.values
     n = len(px)
@@ -286,15 +305,41 @@ def generate_testfol_signal_vectorized(price, ma, tol_series):
     if start_index >= n:
         return pd.Series(False, index=ma.index)
     
+    # Initialize minimum holding period tracker
+    days_since_last_change = 0
+    last_change_idx = start_index
+    
     for t in range(start_index, n):
         if np.isnan(px[t]) or np.isnan(upper[t]) or np.isnan(lower[t]):
             sig[t] = sig[t-1] if t > 0 else False
+        elif t - last_change_idx < min_holding_days:
+            # Enforce minimum holding period
+            sig[t] = sig[t-1]
         elif not sig[t - 1]:
-            sig[t] = px[t] > upper[t]
+            # Currently in RISK-OFF regime
+            if px[t] > upper[t]:
+                # Signal change to RISK-ON
+                sig[t] = True
+                last_change_idx = t
+                days_since_last_change = 0
+            else:
+                sig[t] = False
         else:
-            sig[t] = not (px[t] < lower[t])
+            # Currently in RISK-ON regime
+            if px[t] < lower[t]:
+                # Signal change to RISK-OFF
+                sig[t] = False
+                last_change_idx = t
+                days_since_last_change = 0
+            else:
+                sig[t] = True
+        
+        # Increment days since last change
+        if t > last_change_idx:
+            days_since_last_change += 1
     
     return pd.Series(sig, index=ma.index).fillna(False)
+
 
 # ============================================================
 # SIG ENGINE — NOW USING CALENDAR QUARTER-ENDS (B1)
@@ -1006,7 +1051,7 @@ def main():
     )
     annual_drag_decimal = annual_drag_pct / 100.0
     
-    # MOVING AVERAGE PARAMETERS
+    # MOVING AVERAGE PARAMETERS - MA IS FIXED AT 200
     st.sidebar.header("Moving Average Parameters")
     
     ma_type = st.sidebar.selectbox(
@@ -1016,15 +1061,11 @@ def main():
         help="Simple Moving Average or Exponential Moving Average"
     )
     
-    ma_length = st.sidebar.slider(
-        "MA Length (days)",
-        min_value=10,
-        max_value=500,
-        value=int(user_prefs["ma_length"]),
-        step=10,
-        help="Length of the moving average window"
-    )
+    # Display MA length as fixed at 200
+    st.sidebar.write(f"**MA Length:** 200 days (Fixed)")
+    ma_length = 200  # Always fixed at 200
     
+    # Tolerance parameter
     tolerance_pct = st.sidebar.slider(
         "Tolerance (%)",
         min_value=0.0,
@@ -1035,6 +1076,16 @@ def main():
     )
     tolerance_decimal = tolerance_pct / 100.0
     
+    # MINIMUM HOLDING PERIOD
+    min_holding_days = st.sidebar.slider(
+        "Minimum Holding Period (days)",
+        min_value=0,
+        max_value=30,
+        value=int(user_prefs["min_holding_days"]),
+        step=1,
+        help="Minimum days to hold after a regime change. Prevents excessive trading."
+    )
+
     st.sidebar.header("Quarterly Portfolio Values")
     # Portfolio values with saved preferences - only ONE portfolio now
     qs_cap_1 = st.sidebar.number_input("Portfolio Value at Last Rebalance ($)", 
@@ -1052,8 +1103,9 @@ def main():
     # Display current parameters
     st.sidebar.header("Current Parameters")
     st.sidebar.write(f"**MA Type:** {ma_type}")
-    st.sidebar.write(f"**MA Length:** {ma_length} days")
+    st.sidebar.write(f"**MA Length:** {ma_length} days (Fixed)")
     st.sidebar.write(f"**Tolerance:** {tolerance_pct:.1f}%")
+    st.sidebar.write(f"**Minimum Holding Period:** {min_holding_days} days")
     st.sidebar.write(f"**Portfolio Drag:** {annual_drag_pct:.1f}% annual")
     
     st.caption(
@@ -1084,9 +1136,10 @@ def main():
                 "official_inception_date": official_inception_date,
                 "benchmark_ticker": benchmark_ticker,
                 "ma_type": ma_type,
-                "ma_length": ma_length,
+                "ma_length": ma_length,  # Fixed at 200
                 "tolerance_pct": tolerance_pct,
-             }
+                "min_holding_days": min_holding_days,  # New parameter
+            }
             
             # Save to user's file
             if portfolio_prefs.save_preferences(preferences):
@@ -1131,11 +1184,11 @@ def main():
     
     st.info(f"Loaded {len(prices)} trading days of data from {prices.index[0].date()} to {prices.index[-1].date()} for backtesting")
     
-    # USE USER-SELECTED PARAMETERS
-    best_len  = ma_length
+    # MA IS FIXED AT 200
+    best_len = 200  # Always fixed
     best_type = ma_type.lower()  # Convert to lowercase for internal use
     
-    # Generate signal with user parameters
+    # Generate signal with user parameters including minimum holding period
     portfolio_index = build_portfolio_index(prices, risk_on_weights, annual_drag_pct=annual_drag_decimal)
     
     # ============================================================
@@ -1150,18 +1203,21 @@ def main():
 
     st.write(
         f"**MA Type:** {ma_type}  —  "
-        f"**Length:** {best_len} days  —  "
-        f"**Tolerance:** {best_tol:.2%}"
+        f"**Length:** {best_len} days (Fixed) —  "
+        f"**Tolerance:** {best_tol:.2%} —  "
+        f"**Minimum Holding Period:** {min_holding_days} days"
     )
     if annual_drag_pct > 0:
         daily_drag_factor = (1 - annual_drag_decimal) ** (1/252)
         daily_drag_pct = (1 - daily_drag_factor) * 100
         st.write(f"**Portfolio Drag:** {annual_drag_pct:.1f}% annual (≈{daily_drag_pct:.4f}% daily)")
 
+    # Generate signal WITH minimum holding period
     sig = generate_testfol_signal_vectorized(
         portfolio_index,
         opt_ma,
-        tol_series
+        tol_series,
+        min_holding_days=min_holding_days
     )
     
     # Run backtest with user parameters

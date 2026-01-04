@@ -21,8 +21,7 @@ if not os.path.exists('config.yaml'):
     with open('config.yaml', 'w') as f:
         yaml.dump({
             "credentials": {"usernames": {}},
-            "cookie": {"name": "portfolio_app", "key": "temporary-key-change-later-123", "expiry_days": 30},
-            "preauthorized": {"emails": []}
+            "cookie": {"name": "portfolio_app", "key": "temporary-key-change-later-123", "expiry_days": 30}
         }, f)
 
 # Load config
@@ -34,8 +33,7 @@ authenticator = stauth.Authenticate(
     config['credentials'],
     config['cookie']['name'],
     config['cookie']['key'],
-    config['cookie']['expiry_days'],
-    config['preauthorized']
+    config['cookie']['expiry_days']
 )
 
 # Show login
@@ -1005,7 +1003,7 @@ def main():
     gap = prog_1['Gap ($)']
     date_str = next_q_end.strftime("%m/%d/%Y")
     days_str = f"{days_to_next_q} days"
-    dollar_amount = f"\${abs(gap):,.2f}"
+    dollar_amount = f"${abs(gap):,.2f}"
     
     if gap > 0:
         message = f"**Portfolio:** **Sell {dollar_amount}** of the Risk Off Allocation and **Buy {dollar_amount}** of the Risk On Allocation on **{date_str}** ({days_str})"
@@ -1342,7 +1340,7 @@ def main():
 # SECURE KEY GENERATION FOR DEPLOYMENT
 # ============================================================
 # IMPORTANT: For deployment to Streamlit Cloud, UNCOMMENT this line:
-  st.write(f"🔐 Copy this to config.yaml: {os.urandom(32).hex()}")
+# st.write(f"🔐 Copy this to config.yaml: {os.urandom(32).hex()}")
 # Then copy the key it shows and paste it in config.yaml replacing "temporary-key-change-later-123"
 # Then REMOVE this line from the code
 

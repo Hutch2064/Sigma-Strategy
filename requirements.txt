@@ -1,8 +1,8 @@
-streamlit==1.28.0
-numpy==1.23.5
-pandas==1.5.3
-yfinance==0.2.18
-matplotlib==3.6.3
-scipy==1.9.3  # ← OLD BUT GUARANTEED TO WORK
-bcrypt==3.2.2
-python-dotenv==0.21.0
+streamlit==1.35.0
+numpy==1.26.4
+pandas==2.2.2
+yfinance==0.2.40
+matplotlib==3.8.0
+scipy==1.11.4  # ← THIS VERSION HAS PRE-BUILT WHEELS
+bcrypt==4.1.3
+python-dotenv==1.0.1

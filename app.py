@@ -68,7 +68,10 @@ except TypeError:
                         username = login_username
                         auth_status = True
                         st.success(f"Welcome {name}!")
-                        st.rerun()
+                         # Store in session state
+                         st.session_state.auth_name = name
+                         st.session_state.auth_username = username
+                         st.rerun()
                     else:
                         st.error("Invalid password")
                 else:
@@ -103,6 +106,10 @@ except TypeError:
         st.stop()
 
 # Check authentication status
+# Store authentication in session state
+st.session_state.auth_name = name
+st.session_state.auth_username = username
+
 if auth_status == False:
     st.error('❌ Wrong username/password')
     st.stop()
@@ -135,8 +142,13 @@ if auth_status == None:
                 with open('config.yaml', 'w') as f:
                     yaml.dump(config, f)
                 st.success("✅ Account created! Please login.")
-                st.rerun()
-    st.stop()
+    st.rerun()
+
+# Store authentication in session state
+st.session_state.auth_name = name
+st.session_state.auth_username = username
+
+st.stop()
 
 # ============================================================
 # SIMPLE PREFERENCES (NO SEPARATE CLASS)
@@ -789,8 +801,12 @@ def plot_monte_carlo_results(results_dict, strategy_names):
 def main():
     st.set_page_config(page_title="Portfolio MA Regime Strategy", layout="wide")
     
+    # Get user info from session state
+    name = st.session_state.get('auth_name', 'User')
+    username = st.session_state.get('auth_username', 'user')
+    
     # User is authenticated at this point
-    st.sidebar.title(f"👋 Welcome {name}!")
+    st.sidebar.title(f"Welcome {name}!")
     
     # Logout button
     if st.sidebar.button("Logout"):
@@ -1414,4 +1430,5 @@ def main():
 # ============================================================
 
 if __name__ == "__main__":
-    main()
+    # Pass the name, auth_status, and username to main function
+    main(name, auth_status, username)

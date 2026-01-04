@@ -1702,8 +1702,8 @@ def main():
         regime_df = pd.DataFrame(regime_rows, columns=["Regime", "Start", "End", "Duration (days)"])
         st.dataframe(regime_df)
 
-        on_durations = regime_df[regime_df['Regime']=='RISK-ON']['Duration (days)']
-        off_durations = regime_df[regime_df['Regime']=='RISK-OFF']['Duration (days)']
+        on_durations = regime_df[regime_df['Regime']=='Risk On']['Duration (days)']
+        off_durations = regime_df[regime_df['Regime']=='Risk Off']['Duration (days)']
         
         st.write(f"**Average Risk On duration:** {on_durations.mean():.1f} days" if len(on_durations) > 0 else "**Avg Risk On duration:** 0 days")
         st.write(f"**Average Risk Off duration:** {off_durations.mean():.1f} days" if len(off_durations) > 0 else "**Avg Risk Off duration:** 0 days")

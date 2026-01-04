@@ -9,6 +9,8 @@ import streamlit_authenticator as stauth
 import json
 import os
 import bcrypt
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
 import sqlite3
 import secrets
 import hashlib
@@ -68,11 +70,51 @@ def email_exists(email):
             (email,)
         ).fetchone() is not None
 
+def send_email(to_email, subject, html_body):
+    message = Mail(
+        from_email="support@yourdomain.com",
+        to_emails=to_email,
+        subject=subject,
+        html_content=html_body
+    )
+    sg = SendGridAPIClient(st.secrets["SENDGRID_API_KEY"])
+    sg.send(message)
+
 def create_user(username, name, email, password):
     with get_db() as conn:
         conn.execute(
             "INSERT INTO users (username, name, email, password_hash) VALUES (?, ?, ?, ?)",
             (username, name, email, hash_password(password))
+        )
+def create_token(username, minutes=30):
+    raw = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw.encode()).hexdigest()
+    expires = datetime.utcnow() + timedelta(minutes=minutes)
+
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO password_resets (token_hash, username, expires_at) VALUES (?, ?, ?)",
+            (token_hash, username, expires)
+        )
+    return raw
+
+def validate_token(raw_token):
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    now = datetime.utcnow()
+
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT username FROM password_resets WHERE token_hash = ? AND expires_at > ?",
+            (token_hash, now)
+        ).fetchone()
+
+    return row[0] if row else None
+
+def consume_token(username):
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM password_resets WHERE username = ?",
+            (username,)
         )
 
 # ============================================================
@@ -137,7 +179,35 @@ login_tab, signup_tab = st.tabs(["Login", "Create Account"])
 
 with login_tab:
     name, authentication_status, username = authenticator.login("Login", "main")
+        
+    st.markdown("#### Forgot Password?")
+    reset_email = st.text_input("Enter your email to reset password", key="reset_email")
 
+    if st.button("Send Reset Link"):
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT username FROM users WHERE email = ? AND email_verified = 1",
+                (reset_email,)
+            ).fetchone()
+
+        if row:
+            token = create_token(row[0], minutes=30)
+            reset_link = f"{st.secrets['APP_URL']}?reset={token}"
+
+            send_email(
+                reset_email,
+                "Reset your password",
+                f"""
+                <p>Click the link below to reset your password:</p>
+                <p><a href="{reset_link}">Reset Password</a></p>
+                <p>This link expires in 30 minutes.</p>
+                """
+            )
+
+        st.success("If the email exists, a reset link has been sent.")
+
+
+    
     if authentication_status is False:
         st.error("Invalid username or password")
 
@@ -168,10 +238,24 @@ with signup_tab:
             st.stop()
 
     create_user(new_username, new_name, new_email, new_password)
-    st.success("Account created. Please verify your email before logging in.")
+
+    token = create_token(new_username, minutes=60)
+    verify_link = f"{st.secrets['APP_URL']}?verify={token}"
+
+    send_email(
+        new_email,
+        "Verify your email",
+        f"""
+        <p>Welcome to Sigma Strategy.</p>
+        <p>Please verify your email by clicking the link below:</p>
+        <p><a href="{verify_link}">Verify Email</a></p>
+        <p>This link expires in 60 minutes.</p>
+        """
+    )
+
+    st.success("Account created. Check your email to verify before logging in.")
     st.stop()
-        st.success("Account created successfully. Please log in.")
-        st.rerun()
+
         
 if authentication_status is not True:
     st.stop()
@@ -804,6 +888,51 @@ def plot_monte_carlo_results(results_dict, strategy_names):
 
 def main():
     st.set_page_config(page_title="Portfolio MA Regime Strategy", layout="wide")
+
+    # ============================================================
+    # EMAIL VERIFY / PASSWORD RESET ROUTING
+    # ============================================================
+
+    params = st.query_params
+
+    if "verify" in params:
+        username = validate_token(params["verify"])
+        if username:
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE users SET email_verified = 1 WHERE username = ?",
+                    (username,)
+                )
+            consume_token(username)
+            st.success("Email verified. You may now log in.")
+        else:
+            st.error("Verification link is invalid or expired.")
+        st.stop()
+
+    if "reset" in params:
+        reset_user = validate_token(params["reset"])
+        if not reset_user:
+            st.error("Reset link is invalid or expired.")
+            st.stop()
+
+        st.subheader("Reset Password")
+        pw1 = st.text_input("New Password", type="password")
+        pw2 = st.text_input("Confirm Password", type="password")
+
+        if st.button("Reset Password"):
+            if not pw1 or pw1 != pw2:
+                st.error("Passwords do not match.")
+                st.stop()
+
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE users SET password_hash = ? WHERE username = ?",
+                    (hash_password(pw1), reset_user)
+                )
+            consume_token(reset_user)
+            st.success("Password reset successfully. You may log in.")
+            st.stop()
+
     
     # Get user info from session state
     name = st.session_state.get('name', 'User')

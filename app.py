@@ -1058,23 +1058,23 @@ def main():
     annual_drag_decimal = annual_drag_pct / 100.0
     
     # MOVING AVERAGE PARAMETERS - FIXED IN BACKGROUND
-    	# MA is always 200-day SMA with 0% tolerance
-    		ma_type = "SMA"
-    		ma_length = 200
-    		tolerance_pct = 0.0
-    		tolerance_decimal = 0.0
+    # MA is always 200-day SMA with 0% tolerance
+    ma_type = "SMA"
+    ma_length = 200
+    tolerance_pct = 0.0
+    tolerance_decimal = 0.0
     
-    	# MINIMUM HOLDING PERIOD
-    		min_holding_days = st.sidebar.number_input(
-        		"Minimum Holding Period (days)",
-        		min_value=0,
-        		max_value=365,
-        		value=int(user_prefs["min_holding_days"]),
-        		step=1,
-        		help="Minimum days to hold after a regime change. Prevents excessive trading."
-    		)
+    # MINIMUM HOLDING PERIOD
+    min_holding_days = st.sidebar.number_input(
+        "Minimum Holding Period (days)",
+        min_value=0,
+        max_value=365,
+        value=int(user_prefs["min_holding_days"]),
+        step=1,
+        help="Minimum days to hold after a regime change. Prevents excessive trading."
+    )
 
-    	st.sidebar.header("Quarterly Portfolio Values")
+    st.sidebar.header("Quarterly Portfolio Values")
     # Portfolio values with saved preferences - only ONE portfolio now
     qs_cap_1 = st.sidebar.number_input("Portfolio Value at Last Rebalance ($)", 
                                        min_value=0.0, 
@@ -1087,7 +1087,6 @@ def main():
                                          min_value=0.0, 
                                          value=float(user_prefs["real_cap_1"]), 
                                          step=100.0)
-
 
     # Display current parameters
     st.sidebar.header("Current Parameters")

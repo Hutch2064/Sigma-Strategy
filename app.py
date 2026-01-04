@@ -250,13 +250,6 @@ with signup_tab:
 
         st.success("Account created. Check your email to verify before logging in.")
         st.stop()
-
-    
-    if authentication_status is False:
-        st.error("Invalid username or password")
-
-
-
         
 if authentication_status is not True:
     st.stop()

@@ -1066,12 +1066,12 @@ def main():
     
     # MINIMUM HOLDING PERIOD
     min_holding_days = st.sidebar.number_input(
-        "Minimum Holding Period (days)",
+        "Confirmation Days",
         min_value=0,
         max_value=365,
         value=int(user_prefs["min_holding_days"]),
         step=1,
-        help="Minimum days to hold after a regime change. Prevents excessive trading."
+        help="The number of days to hold after a 200 Day SMA crossover."
     )
 
     st.sidebar.header("Quarterly Portfolio Values")

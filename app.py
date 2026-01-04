@@ -12,7 +12,7 @@ import json
 import os
 
 # ============================================================
-# SIMPLE AUTHENTICATION - COMPATIBLE VERSION
+# SIMPLE AUTHENTICATION - FIXED VERSION
 # ============================================================
 
 # Load or create config
@@ -34,96 +34,51 @@ if 'credentials' not in config:
 if 'usernames' not in config['credentials']:
     config['credentials']['usernames'] = {}
 
-# Create authenticator
-authenticator = stauth.Authenticate(
-    config['credentials'],
-    config['cookie']['name'],
-    config['cookie']['key'],
-    config['cookie']['expiry_days']
-)
+# Initialize session state for authentication
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+if 'username' not in st.session_state:
+    st.session_state.username = None
+if 'name' not in st.session_state:
+    st.session_state.name = None
 
-# Show login - handle different API versions
-try:
-    # Try newest API (v0.2.0+)
-    name, auth_status, username = authenticator.login(location='main')
-except TypeError:
-    try:
-        # Try older API
-        name, auth_status, username = authenticator.login('Login', 'main')
-    except:
-        # Manual fallback
-        st.header("Login")
-        col1, col2 = st.columns(2)
+# If not authenticated, show login/signup page
+if not st.session_state.authenticated:
+    st.title("Portfolio Strategy App")
+    
+    tab1, tab2 = st.tabs(["Login", "Sign Up"])
+    
+    with tab1:
+        st.subheader("Login")
+        login_username = st.text_input("Username", key="login_user")
+        login_password = st.text_input("Password", type="password", key="login_pass")
         
-        with col1:
-            st.subheader("Login")
-            login_username = st.text_input("Username", key="login_user")
-            login_password = st.text_input("Password", type="password", key="login_pass")
-            
-            if st.button("Login"):
-                if login_username in config['credentials']['usernames']:
-                    hashed_password = config['credentials']['usernames'][login_username]['password']
-                    if stauth.Hasher([login_password]).verify(hashed_password):
-                        name = config['credentials']['usernames'][login_username]['name']
-                        username = login_username
-                        auth_status = True
-                        st.success(f"Welcome {name}!")
-                        # Store in session state
-                        st.session_state.auth_name = name
-                        st.session_state.auth_username = username
+        if st.button("Login", key="login_btn"):
+            if login_username in config['credentials']['usernames']:
+                stored_password = config['credentials']['usernames'][login_username]['password']
+                try:
+                    # Verify password
+                    if stauth.Hasher([login_password]).verify(stored_password):
+                        st.session_state.authenticated = True
+                        st.session_state.username = login_username
+                        st.session_state.name = config['credentials']['usernames'][login_username]['name']
+                        st.success(f"Welcome {st.session_state.name}!")
                         st.rerun()
                     else:
                         st.error("Invalid password")
-                else:
-                    st.error("User not found")
-        
-        with col2:
-            st.subheader("Sign Up")
-            new_user = st.text_input("New Username", key="signup_user")
-            new_name = st.text_input("Your Name", key="signup_name")
-            new_pass = st.text_input("New Password", type="password", key="signup_pass")
-            confirm_pass = st.text_input("Confirm Password", type="password", key="signup_confirm")
-            
-            if st.button("Create Account"):
-                if not all([new_user, new_name, new_pass, confirm_pass]):
-                    st.error("Fill all fields")
-                elif new_pass != confirm_pass:
-                    st.error("Passwords don't match")
-                elif new_user in config['credentials']['usernames']:
-                    st.error("Username taken")
-                else:
-                    config['credentials']['usernames'][new_user] = {
-                        'email': f"{new_user}@example.com",
-                        'name': new_name,
-                        'password': stauth.Hasher([new_pass]).generate()[0]
-                    }
-                    with open('config.yaml', 'w') as f:
-                        yaml.dump(config, f)
-                    st.success("Account created! Please login.")
-                    st.rerun()
-        
-        # Stop execution here - user needs to login
-        st.stop()
-
-# After login logic, check auth_status
-if auth_status:
-    st.session_state.auth_name = name
-    st.session_state.auth_username = username
-    main()
-elif auth_status == False:
-    st.error('❌ Wrong username/password')
-    st.stop()
-elif auth_status == None:
-    # Show signup form if using authenticator
-    st.write("## 📝 Create Account")
+                except:
+                    st.error("Authentication error")
+            else:
+                st.error("User not found")
     
-    with st.form("signup"):
-        new_user = st.text_input("Username")
-        new_name = st.text_input("Your Name") 
-        new_pass = st.text_input("Password", type="password")
-        confirm_pass = st.text_input("Confirm Password", type="password")
+    with tab2:
+        st.subheader("Sign Up")
+        new_user = st.text_input("New Username", key="signup_user")
+        new_name = st.text_input("Your Name", key="signup_name")
+        new_pass = st.text_input("New Password", type="password", key="signup_pass")
+        confirm_pass = st.text_input("Confirm Password", type="password", key="signup_confirm")
         
-        if st.form_submit_button("Create Account"):
+        if st.button("Create Account", key="signup_btn"):
             if not all([new_user, new_name, new_pass, confirm_pass]):
                 st.error("Fill all fields")
             elif new_pass != confirm_pass:
@@ -131,23 +86,24 @@ elif auth_status == None:
             elif new_user in config['credentials']['usernames']:
                 st.error("Username taken")
             else:
-                # Add user
+                # Hash password and add user
+                hashed_password = stauth.Hasher([new_pass]).generate()[0]
                 config['credentials']['usernames'][new_user] = {
                     'email': f"{new_user}@example.com",
                     'name': new_name,
-                    'password': stauth.Hasher([new_pass]).generate()[0]
+                    'password': hashed_password
                 }
-                # Save
+                # Save config
                 with open('config.yaml', 'w') as f:
                     yaml.dump(config, f)
                 st.success("✅ Account created! Please login.")
-    st.rerun()
+                st.rerun()
+    
+    # Stop execution - user must login first
+    st.stop()
 
-# Store authentication in session state
-st.session_state.auth_name = name
-st.session_state.auth_username = username
-
-st.stop()
+# If we get here, user is authenticated
+# Continue with the main app
 
 # ============================================================
 # SIMPLE PREFERENCES (NO SEPARATE CLASS)
@@ -156,6 +112,8 @@ st.stop()
 # Initialize user preferences in session state
 if 'user_prefs' not in st.session_state:
     st.session_state.user_prefs = {}
+
+username = st.session_state.username
 
 if username not in st.session_state.user_prefs:
     # Default settings
@@ -801,15 +759,17 @@ def main():
     st.set_page_config(page_title="Portfolio MA Regime Strategy", layout="wide")
     
     # Get user info from session state
-    name = st.session_state.get('auth_name', 'User')
-    username = st.session_state.get('auth_username', 'user')
+    name = st.session_state.get('name', 'User')
+    username = st.session_state.get('username', 'user')
     
     # User is authenticated at this point
     st.sidebar.title(f"Welcome {name}!")
     
     # Logout button
     if st.sidebar.button("Logout"):
-        authenticator.logout('Logout', 'main')
+        st.session_state.authenticated = False
+        st.session_state.username = None
+        st.session_state.name = None
         st.rerun()
     
     show_strategy_overview()
@@ -1417,17 +1377,8 @@ def main():
                     }), use_container_width=True)
 
 # ============================================================
-# SECURE KEY GENERATION FOR DEPLOYMENT
-# ============================================================
-# IMPORTANT: For deployment to Streamlit Cloud, UNCOMMENT this line:
-# st.write(f"🔐 Copy this to config.yaml: {os.urandom(32).hex()}")
-# Then copy the key it shows and paste it in config.yaml replacing "temporary-key-change-later-123"
-# Then REMOVE this line from the code
-
-# ============================================================
 # LAUNCH APP
 # ============================================================
 
 if __name__ == "__main__":
-    # No parameters needed - main() gets auth from session state
     main()

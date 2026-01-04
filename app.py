@@ -995,10 +995,10 @@ def main():
     start = st.sidebar.text_input("Backtest Start Date", user_prefs["start_date"])
     
     # SET FIXED MA PARAMETERS
-    	ma_type = "SMA"
-    	ma_length = 200
-    	tolerance_pct = 0.0
-    	tolerance_decimal = 0.0
+    ma_type = "SMA"
+    ma_length = 200
+    tolerance_pct = 0.0
+    tolerance_decimal = 0.0
     
     # End date with saved preference
     end = st.sidebar.text_input("End Date (optional)", user_prefs["end_date"])
@@ -1058,21 +1058,21 @@ def main():
     annual_drag_decimal = annual_drag_pct / 100.0
     
     # MOVING AVERAGE PARAMETERS - FIXED IN BACKGROUND
-    		# MA is always 200-day SMA with 0% tolerance
-    		ma_type = "SMA"
-    		ma_length = 200
-    		tolerance_pct = 0.0
-    		tolerance_decimal = 0.0
+    	# MA is always 200-day SMA with 0% tolerance
+    	ma_type = "SMA"
+    	ma_length = 200
+    	tolerance_pct = 0.0
+    	tolerance_decimal = 0.0
     
-    		# MINIMUM HOLDING PERIOD
-    		min_holding_days = st.sidebar.number_input(
-        		"Minimum Holding Period (days)",
-        		min_value=0,
-        		max_value=365,
-        		value=int(user_prefs["min_holding_days"]),
-        		step=1,
-        		help="Minimum days to hold after a regime change. Prevents excessive trading."
-    		)
+    	# MINIMUM HOLDING PERIOD
+    	min_holding_days = st.sidebar.number_input(
+        	"Minimum Holding Period (days)",
+        	min_value=0,
+        	max_value=365,
+        	value=int(user_prefs["min_holding_days"]),
+        	step=1,
+        	help="Minimum days to hold after a regime change. Prevents excessive trading."
+    	)
 
     	st.sidebar.header("Quarterly Portfolio Values")
     # Portfolio values with saved preferences - only ONE portfolio now

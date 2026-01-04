@@ -105,9 +105,6 @@ with login_tab:
 
     if authentication_status is False:
         st.error("Invalid username or password")
-        st.stop()
-    elif authentication_status is None:
-        st.stop()
 
 with signup_tab:
     st.subheader("Create Account")
@@ -133,6 +130,9 @@ with signup_tab:
         create_user(new_username, new_name, new_password)
         st.success("Account created successfully. Please log in.")
         st.rerun()
+        
+if authentication_status is not True:
+    st.stop()
 
 st.session_state.username = username
 st.session_state.name = name

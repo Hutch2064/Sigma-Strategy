@@ -1,27 +1,11 @@
 credentials:
   usernames:
-    admin:
-      email: admin@example.com
-      name: Admin User
-      password: $2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW
-      preferences:  # ← ADD THIS SECTION
-        start_date: "2020-01-01"
-        risk_on_tickers: "TQQQ"
-        risk_on_weights: "1.0"
-        risk_off_tickers: "SHY"
-        risk_off_weights: "1.0"
-        annual_drag_pct: 0.0
-        qs_cap_1: 10000
-        real_cap_1: 10000
-        official_inception_date: "2025-12-22"
-        benchmark_ticker: "QQQ"
-        last_saved: "2024-01-01T00:00:00"
+    # Empty - users will sign up automatically
 
 cookie:
-  name: portfolio_auth
-  key: some_secret_key
+  name: portfolio_app
+  key: "temporary-key-change-later-123"
   expiry_days: 30
 
 preauthorized:
-  emails:
-    - admin@example.com
+  emails: []

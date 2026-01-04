@@ -1342,7 +1342,7 @@ def main():
 # SECURE KEY GENERATION FOR DEPLOYMENT
 # ============================================================
 # IMPORTANT: For deployment to Streamlit Cloud, UNCOMMENT this line:
-# st.write(f"🔐 Copy this to config.yaml: {os.urandom(32).hex()}")
+  st.write(f"🔐 Copy this to config.yaml: {os.urandom(32).hex()}")
 # Then copy the key it shows and paste it in config.yaml replacing "temporary-key-change-later-123"
 # Then REMOVE this line from the code
 

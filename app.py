@@ -1365,7 +1365,7 @@ def main():
                             "Average in Worst 1% (CVaR 99%)": -results['cvar_99']
                         })
                     
-                    worst_case_df = pd.DataFrame(worst_cases)
+                     worst_case_df = pd.DataFrame(worst_cases)
                     st.dataframe(worst_case_df.style.format({
                         "5th Percentile (Bad Year)": "{:.2%}",
                         "1st Percentile (Very Bad Year)": "{:.2%}",

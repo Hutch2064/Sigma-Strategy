@@ -723,11 +723,7 @@ def main():
     # User is authenticated at this point
     st.sidebar.title(f"Welcome {name}!")
     
-    # Logout button
-    if st.sidebar.button("Logout"):
-        authenticator.logout("Logout", "sidebar")
-        st.session_state.clear()
-        st.rerun()
+    authenticator.logout("Logout", "sidebar")
     
     show_strategy_overview()
     st.markdown("---")

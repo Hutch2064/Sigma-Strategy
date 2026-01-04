@@ -41,17 +41,11 @@ A "Risk Off Regime" = 200 Day SMA > Risk On Allocation Index.
 
 ---
 
-### **Sigma Strategy**
+### **Sigma System**
 
 - If the 200 Day SMA < Risk On Allocation Index, then the model runs the SIG System as instructed above.
 - If the 200 Day SMA > Risk On Allocation Index, then the model allocates all portfolio capital to the Risk Off Allocation.
 - When model flips from "Risk Off" to "Risk On", the model refers to the Allocation Tables and resumes the current SIG System weights.
-
-### **New Feature: Minimum Holding Period**
-- After each regime change (Risk-On to Risk-Off or vice versa), the model enforces a minimum holding period.
-- During this period, no further regime changes are allowed.
-- This helps reduce excessive trading and provides stability.
-""")
 
 # ============================================================
 # AUTHENTICATION SETUP
@@ -1200,7 +1194,7 @@ def main():
                           ma_flip_multiplier=3.0, annual_drag_pct=annual_drag_decimal)
     
     latest_signal = sig.iloc[-1]
-    current_regime = "RISK-ON" if latest_signal else "RISK-OFF"
+    current_regime = "Risk On" if latest_signal else "Risk Off"
 
     st.subheader(f"Current MA Regime: {current_regime}")
 
@@ -1423,7 +1417,7 @@ def main():
     # ============================================================
     if len(hybrid_rebals) > 0:
         reb_df = pd.DataFrame({"Rebalance Date": pd.to_datetime(hybrid_rebals)})
-        st.subheader("Sigma – Actual Rebalance Dates (Historical)")
+        st.subheader("Sigma System – Historical Rebalance Dates")
         st.dataframe(reb_df)
     else:
         st.subheader("Sigma – Historical Rebalance Dates")
@@ -1671,10 +1665,10 @@ def main():
 
         if latest_signal:
             delta = (P - lower) / P
-            st.write(f"**Drop Required for MA Crossover:** {delta:.2%}")
+            st.write(f"**Drop Required for Crossover:** {delta:.2%}")
         else:
             delta = (upper - P) / P
-            st.write(f"**Gain Required for MA Crossover:** {delta:.2%}")
+            st.write(f"**Gain Required for Crossover:** {delta:.2%}")
     else:
         st.write("**Insufficient data for MA distance calculation**")
 
@@ -1710,8 +1704,8 @@ def main():
         on_durations = regime_df[regime_df['Regime']=='RISK-ON']['Duration (days)']
         off_durations = regime_df[regime_df['Regime']=='RISK-OFF']['Duration (days)']
         
-        st.write(f"**Average Risk On duration:** {on_durations.mean():.1f} days" if len(on_durations) > 0 else "**Avg RISK-ON duration:** 0 days")
-        st.write(f"**Average Risk Off duration:** {off_durations.mean():.1f} days" if len(off_durations) > 0 else "**Avg RISK-OFF duration:** 0 days")
+        st.write(f"**Average Risk On duration:** {on_durations.mean():.1f} days" if len(on_durations) > 0 else "**Avg Risk On duration:** 0 days")
+        st.write(f"**Average Risk Off duration:** {off_durations.mean():.1f} days" if len(off_durations) > 0 else "**Avg Risk Off duration:** 0 days")
     else:
         st.write("No 200 Day SMA Crossover data available")
 
@@ -1753,7 +1747,7 @@ def main():
     # STRATEGY DIAGNOSTICS
     # ============================================================
 
-    st.subheader("Strategy Diagnostics")
+    st.subheader("Sigma System Diagnostics")
 
     diag_fig = plot_diagnostics(
         hybrid_eq = hybrid_eq,

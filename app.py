@@ -109,7 +109,7 @@ class PortfolioPreferences:
             "ma_type": "SMA",
             "ma_length": 200,  # Fixed at 200
             "tolerance_pct": 0.0,
-            "min_holding_days": 2,  # New: Minimum holding period after regime change
+            "min_holding_days": 0,  
         } 
     
     

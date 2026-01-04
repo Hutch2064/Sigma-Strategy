@@ -1,7 +1,5 @@
 credentials:
-  usernames:
-    # Empty - users will sign up automatically
-
+  usernames: {}
 cookie:
   name: portfolio_app
   key: "temporary-key-change-later-123"

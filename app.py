@@ -1552,7 +1552,7 @@ def main():
     )
 
     # ENHANCED STAT TABLE WITH NEW METRICS
-    st.subheader("Backtest: 200 Day SMA vs Buy & Hold vs Sigma vs SIG")
+    st.subheader("Backtest: All Strategies Performance Statistics")
     rows = [
         ("CAGR", "CAGR"),
         ("Volatility", "Volatility"),
@@ -1660,7 +1660,7 @@ def main():
         st.dataframe(add_pct(ma_alloc))
 
     # MA Distance (unchanged)
-    st.subheader("Next MA Signal Distance")
+    st.subheader("Next 200 Day SMA Crossover Distance")
     if len(opt_ma) > 0 and len(portfolio_index) > 0:
         latest_date = opt_ma.dropna().index[-1]
         P = float(portfolio_index.loc[latest_date])
@@ -1679,7 +1679,7 @@ def main():
         st.write("**Insufficient data for MA distance calculation**")
 
     # Regime stats plot (unchanged)
-    st.subheader("Moving Average Regime Statistics")
+    st.subheader(" 200 Day SMA Crossover Statistics")
     if len(sig) > 0:
         sig_int = sig.astype(int)
         flips = sig_int.diff().fillna(0).ne(0)
@@ -1699,7 +1699,7 @@ def main():
         regime_rows = []
         for r, s, e in segments:
             regime_rows.append([
-                "RISK-ON" if r == 1 else "RISK-OFF",
+                "Risk On" if r == 1 else "Risk Off",
                 s.date(), e.date(),
                 (e - s).days
             ])
@@ -1710,15 +1710,15 @@ def main():
         on_durations = regime_df[regime_df['Regime']=='RISK-ON']['Duration (days)']
         off_durations = regime_df[regime_df['Regime']=='RISK-OFF']['Duration (days)']
         
-        st.write(f"**Avg RISK-ON duration:** {on_durations.mean():.1f} days" if len(on_durations) > 0 else "**Avg RISK-ON duration:** 0 days")
-        st.write(f"**Avg RISK-OFF duration:** {off_durations.mean():.1f} days" if len(off_durations) > 0 else "**Avg RISK-OFF duration:** 0 days")
+        st.write(f"**Average Risk On duration:** {on_durations.mean():.1f} days" if len(on_durations) > 0 else "**Avg RISK-ON duration:** 0 days")
+        st.write(f"**Average Risk Off duration:** {off_durations.mean():.1f} days" if len(off_durations) > 0 else "**Avg RISK-OFF duration:** 0 days")
     else:
-        st.write("No regime data available")
+        st.write("No 200 Day SMA Crossover data available")
 
     st.markdown("---")  # Separator before final plot
 
     # Final Performance Plot (updated with Buy & Hold with rebalance)
-    st.subheader("Portfolio Strategy Performance Comparison")
+    st.subheader("All Strategy Performance Visual")
 
     plot_index = build_portfolio_index(prices, risk_on_weights, annual_drag_pct=annual_drag_decimal)
     plot_ma = compute_ma(plot_index, best_len, best_type)
@@ -1876,7 +1876,7 @@ def main():
             if valid_results:
                 with col1:
                     safest = min(valid_results, key=lambda x: x[1]['cvar_95'])
-                    st.metric("Most Conservative (Lowest CVaR 95%)", safest[0])
+                    st.metric("Most Conservative", safest[0])
                 
                 with col2:
                     highest_return = max(valid_results, key=lambda x: x[1]['expected_return'])
@@ -1884,31 +1884,7 @@ def main():
                 
                 with col3:
                     highest_prob = max(valid_results, key=lambda x: x[1]['prob_positive'])
-                    st.metric("Highest Probability of Gain", highest_prob[0])
-                
-                # Risk-reward analysis
-                st.write("#### Risk-Reward Analysis")
-                
-                risk_reward_data = []
-                for name, results in valid_results:
-                    # Calculate Sharpe-like ratio (expected return / CVaR)
-                    risk_adjusted = results['expected_return'] / abs(results['cvar_95']) if results['cvar_95'] != 0 else 0
-                    risk_reward_data.append({
-                        "Strategy": name,
-                        "Expected Return": results['expected_return'],
-                        "CVaR 95%": results['cvar_95'],
-                        "Risk-Adjusted Ratio": risk_adjusted,
-                        "Prob of Positive Return": results['prob_positive']
-                    })
-                
-                if risk_reward_data:
-                    risk_reward_df = pd.DataFrame(risk_reward_data)
-                    st.dataframe(risk_reward_df.style.format({
-                        "Expected Return": "{:.2%}",
-                        "CVaR 95%": "{:.2%}",
-                        "Risk-Adjusted Ratio": "{:.3f}",
-                        "Prob of Positive Return": "{:.1%}"
-                    }), use_container_width=True)
+                    st.metric("Highest Probability of Positive Return", highest_prob[0])
                     
                     # Worst-case scenario analysis
                     st.write("#### Worst-Case Scenario Analysis (12-Month Horizon)")
@@ -1933,17 +1909,6 @@ def main():
                         "Average in Worst 1% (CVaR 99%)": "{:.2%}"
                     }), use_container_width=True)
                     
-        # Monte Carlo assumptions disclaimer
-        st.info("""
-        **Monte Carlo Simulation Assumptions:**
-        - Based on historical return distributions (parametric bootstrap)
-        - Assumes future volatility similar to historical
-        - 100,000 simulated 12-month paths per strategy
-        - Does not account for structural breaks or regime changes
-        - Past performance ≠ future results
-        """)
-    else:
-        st.warning("Insufficient data for Monte Carlo simulations. Need at least 100 days of historical data.")
 
 # ============================================================
 # LAUNCH APP

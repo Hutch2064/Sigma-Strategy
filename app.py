@@ -12,126 +12,66 @@ import json
 import os
 
 # ============================================================
-# SIMPLE AUTHENTICATION - FIXED VERSION
+# USER DATA PERSISTENCE (DISK-BACKED)
 # ============================================================
 
-# Load or create config
-if not os.path.exists('config.yaml'):
-    # Create minimal config
-    with open('config.yaml', 'w') as f:
-        yaml.dump({
-            "credentials": {"usernames": {}},
-            "cookie": {"name": "portfolio_app", "key": "temporary-key-change-later-123", "expiry_days": 30}
-        }, f)
+USER_DATA_DIR = "user_data"
+os.makedirs(USER_DATA_DIR, exist_ok=True)
 
-# Load config
-with open('config.yaml') as file:
-    config = yaml.load(file, Loader=SafeLoader)
+DEFAULT_PREFS = {
+    "start_date": "1900-01-01",
+    "risk_on_tickers": "TQQQ",
+    "risk_on_weights": "1.0",
+    "risk_off_tickers": "AGG",
+    "risk_off_weights": "1.0",
+    "annual_drag_pct": 0.0,
+    "qs_cap_1": 10000,
+    "real_cap_1": 10000,
+    "end_date": "",
+    "official_inception_date": "2025-12-22",
+    "benchmark_ticker": "QQQ",
+    "min_holding_days": 1,
+}
 
-# Ensure credentials structure exists
-if 'credentials' not in config:
-    config['credentials'] = {'usernames': {}}
-if 'usernames' not in config['credentials']:
-    config['credentials']['usernames'] = {}
+def _user_file(username):
+    return os.path.join(USER_DATA_DIR, f"{username}.json")
 
-# Initialize session state for authentication
-if 'authenticated' not in st.session_state:
-    st.session_state.authenticated = False
-if 'username' not in st.session_state:
-    st.session_state.username = None
-if 'name' not in st.session_state:
-    st.session_state.name = None
+def load_user_prefs(username):
+    path = _user_file(username)
+    if os.path.exists(path):
+        with open(path, "r") as f:
+            return json.load(f)
+    return DEFAULT_PREFS.copy()
 
-# If not authenticated, show login/signup page
-if not st.session_state.authenticated:
-    st.title("Portfolio Strategy App")
-    
-    tab1, tab2 = st.tabs(["Login", "Sign Up"])
-    
-    with tab1:
-        st.subheader("Login")
-        login_username = st.text_input("Username", key="login_user")
-        login_password = st.text_input("Password", type="password", key="login_pass")
+def save_user_prefs(username, prefs):
+    with open(_user_file(username), "w") as f:
+        json.dump(prefs, f, indent=2)
         
-        if st.button("Login", key="login_btn"):
-            if login_username in config['credentials']['usernames']:
-                stored_password = config['credentials']['usernames'][login_username]['password']
-                
-                # FIX: Simple password verification (remove hash complexity)
-                if login_password == stored_password:  # Temporary test password
-                    st.session_state.authenticated = True
-                    st.session_state.username = login_username
-                    st.session_state.name = config['credentials']['usernames'][login_username]['name']
-                    st.success(f"Welcome {st.session_state.name}!")
-                    st.rerun()
-                else:
-                    st.error("Invalid password")
-            else:
-                st.error("User not found")
-    
-    with tab2:
-        st.subheader("Sign Up")
-        new_user = st.text_input("New Username", key="signup_user")
-        new_name = st.text_input("Your Name", key="signup_name")
-        new_pass = st.text_input("New Password", type="password", key="signup_pass")
-        confirm_pass = st.text_input("Confirm Password", type="password", key="signup_confirm")
-        
-        if st.button("Create Account", key="signup_btn"):
-            if not all([new_user, new_name, new_pass, confirm_pass]):
-                st.error("Fill all fields")
-            elif new_pass != confirm_pass:
-                st.error("Passwords don't match")
-            elif new_user in config['credentials']['usernames']:
-                st.error("Username taken")
-            else:
-                # FIX: Store plain password temporarily for testing
-                config['credentials']['usernames'][new_user] = {
-                    'email': f"{new_user}@example.com",
-                    'name': new_name,
-                    'password': new_pass  # Store test password
-                }
-                # Save config
-                with open('config.yaml', 'w') as f:
-                    yaml.dump(config, f)
-                st.success("✅ Account created! Please login with password 'password123'.")
-                st.rerun()
-    
-    # Stop execution - user must login first
+# ============================================================
+# AUTHENTICATION (COOKIE-PERSISTENT)
+# ============================================================
+
+authenticator = stauth.Authenticate(
+    config['credentials'],
+    config['cookie']['name'],
+    config['cookie']['key'],
+    config['cookie']['expiry_days']
+)
+
+name, authentication_status, username = authenticator.login("Login", "main")
+
+if authentication_status is False:
+    st.error("Invalid username or password")
+    st.stop()
+elif authentication_status is None:
     st.stop()
 
-# If we get here, user is authenticated
-# Continue with the main app
+st.session_state.username = username
+st.session_state.name = name
 
-# ============================================================
-# SIMPLE PREFERENCES (NO SEPARATE CLASS)
-# ============================================================
-
-# Initialize user preferences in session state
-if 'user_prefs' not in st.session_state:
-    st.session_state.user_prefs = {}
-
-username = st.session_state.username
-
-if username not in st.session_state.user_prefs:
-    # Default settings
-    st.session_state.user_prefs[username] = {
-        "start_date": "1900-01-01",
-        "risk_on_tickers": "TQQQ",
-        "risk_on_weights": "1.0", 
-        "risk_off_tickers": "AGG",
-        "risk_off_weights": "1.0",
-        "annual_drag_pct": 0.0,
-        "qs_cap_1": 10000,
-        "real_cap_1": 10000,
-        "end_date": "",
-        "official_inception_date": "2025-12-22",
-        "benchmark_ticker": "QQQ",
-        "min_holding_days": 1,
-    }
-
-# Helper function to get user pref
-def get_pref(key):
-    return st.session_state.user_prefs[username].get(key)
+# Load persisted user preferences once per session
+if "prefs" not in st.session_state:
+    st.session_state.prefs = load_user_prefs(username)
 
 # ============================================================
 # YOUR STRATEGY FUNCTIONS
@@ -776,7 +716,7 @@ def main():
     st.sidebar.header("Strategy Settings")
     
     # Load saved prefs
-    prefs = st.session_state.user_prefs[username]
+    prefs = st.session_state.prefs
     
     # Input fields with saved values
     start = st.sidebar.text_input("Start Date", prefs["start_date"])
@@ -793,22 +733,22 @@ def main():
     
     # Save button
     if st.sidebar.button("💾 Save Settings", type="primary"):
-        # Save to session
-        st.session_state.user_prefs[username] = {
-            "start_date": start,
-            "risk_on_tickers": risk_on_tickers_str,
-            "risk_on_weights": risk_on_weights_str,
-            "risk_off_tickers": risk_off_tickers_str,
-            "risk_off_weights": risk_off_weights_str,
-            "annual_drag_pct": annual_drag,
-            "qs_cap_1": qs_cap_1,
-            "real_cap_1": real_cap_1,
-            "end_date": "",
-            "official_inception_date": inception_date,
-            "benchmark_ticker": benchmark,
-            "min_holding_days": min_days,
-        }
-        st.sidebar.success("Settings saved!")
+    st.session_state.prefs = {
+        "start_date": start,
+        "risk_on_tickers": risk_on_tickers_str,
+        "risk_on_weights": risk_on_weights_str,
+        "risk_off_tickers": risk_off_tickers_str,
+        "risk_off_weights": risk_off_weights_str,
+        "annual_drag_pct": annual_drag,
+        "qs_cap_1": qs_cap_1,
+        "real_cap_1": real_cap_1,
+        "end_date": "",
+        "official_inception_date": inception_date,
+        "benchmark_ticker": benchmark,
+        "min_holding_days": min_days,
+    }
+    save_user_prefs(username, st.session_state.prefs)
+    st.sidebar.success("Settings saved permanently")
     
     run_clicked = st.sidebar.button("🚀 Run Analysis", type="secondary")
     

@@ -3,6 +3,6 @@ numpy==1.26.4
 pandas==2.2.2
 yfinance==0.2.40
 matplotlib==3.8.0
-scipy==1.11.4  # ← THIS VERSION HAS PRE-BUILT WHEELS
+# scipy==1.11.4  ← REMOVE IF NOT ABSOLUTELY NEEDED
 bcrypt==4.1.3
 python-dotenv==1.0.1

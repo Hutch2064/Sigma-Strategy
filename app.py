@@ -1641,7 +1641,7 @@ def main():
 
     latest_signal = sig.iloc[-1] if len(sig) > 0 else False
 
-    tab1, tab2, tab3 = st.tabs(["Sigma", "SIG", "MA"])
+    tab1, tab2, tab3 = st.tabs(["Sigma", "SIG", "200 Day SMA"])
 
     with tab1:
         st.write(f"### Portfolio — Sigma")
@@ -1652,7 +1652,7 @@ def main():
         st.dataframe(add_pct(compute_allocations(real_cap_1, pure_r, pure_s, risk_on_weights, risk_off_weights)))
 
     with tab3:
-        st.write(f"### Portfolio — MA")
+        st.write(f"### Portfolio — 200 Day SMA")
         if latest_signal:
             ma_alloc = compute_allocations(real_cap_1, 1.0, 0.0, risk_on_weights, {"SHY": 0})
         else:

@@ -48,7 +48,7 @@ Used to simulate decay in leveraged funds (e.g., `TQQQ`).
 If not applicable, leave this input at `0`.
 
 **Confirmation Days**  
-The number of days to hold after a 200 Day SMA crossover. Confirmation days reduce noise and whipsaw by ensuring the crossover is persistent by a user specified amount of days. A default of 2 is set to minimize noise.  
+The number of days to hold after a 200 Day SMA crossover. Confirmation days reduce noise by ensuring the crossover is persistent by a user specified amount of days. A default of 0 is set to maximize responsivenes. Users that prefer a more less active approach can test until the desired responsivness of the system is achieved (Note: As confirmation days increase, upside tends to decrease). 
 
 **Portfolio Value at Last Rebalance**  
 Assuming true calendar quarter-end rebalancing, input the total portfolio value at the prior quarter end.

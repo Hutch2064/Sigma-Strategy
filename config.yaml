@@ -1,92 +1,27 @@
-# pages/signup.py
-import streamlit as st
-import yaml
-from yaml.loader import SafeLoader
-import streamlit_authenticator as stauth
-from pathlib import Path
+credentials:
+  usernames:
+    admin:
+      email: admin@example.com
+      name: Admin User
+      password: $2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW
+      preferences:  # ← ADD THIS SECTION
+        start_date: "2020-01-01"
+        risk_on_tickers: "TQQQ"
+        risk_on_weights: "1.0"
+        risk_off_tickers: "SHY"
+        risk_off_weights: "1.0"
+        annual_drag_pct: 0.0
+        qs_cap_1: 10000
+        real_cap_1: 10000
+        official_inception_date: "2025-12-22"
+        benchmark_ticker: "QQQ"
+        last_saved: "2024-01-01T00:00:00"
 
-st.set_page_config(page_title="Sign Up", page_icon="👤")
+cookie:
+  name: portfolio_auth
+  key: some_secret_key
+  expiry_days: 30
 
-st.title("Create New Account")
-
-# Load existing config
-config_path = Path(__file__).parent.parent / "config.yaml"
-
-if config_path.exists():
-    with open(config_path, 'r') as file:
-        config = yaml.load(file, Loader=SafeLoader)
-else:
-    st.error("Configuration file not found!")
-    st.stop()
-
-# Signup form
-with st.form("signup_form"):
-    st.subheader("Account Details")
-    
-    name = st.text_input("Full Name")
-    username = st.text_input("Username (for login)")
-    email = st.text_input("Email Address")
-    password = st.text_input("Password", type="password")
-    confirm_password = st.text_input("Confirm Password", type="password")
-    
-    submitted = st.form_submit_button("Create Account")
-    
-    if submitted:
-        # Validation
-        if not all([name, username, email, password, confirm_password]):
-            st.error("Please fill in all fields")
-        elif password != confirm_password:
-            st.error("Passwords do not match")
-        elif username in config['credentials']['usernames']:
-            st.error("Username already exists")
-        elif len(password) < 6:
-            st.error("Password must be at least 6 characters")
-        else:
-            try:
-                # Hash the password
-                hashed_password = stauth.Hasher([password]).generate()[0]
-                
-                # Add new user to config
-                config['credentials']['usernames'][username] = {
-                    'email': email,
-                    'name': name,
-                    'password': hashed_password,
-                    'preferences': {
-                        'start_date': '1900-01-01',
-                        'risk_on_tickers': 'TQQQ',
-                        'risk_on_weights': '1.0',
-                        'risk_off_tickers': 'AGG',
-                        'risk_off_weights': '1.0',
-                        'annual_drag_pct': 0.0,
-                        'qs_cap_1': 10000,
-                        'real_cap_1': 10000,
-                        'end_date': '',
-                        'official_inception_date': '2025-12-22',
-                        'benchmark_ticker': 'QQQ',
-                        'ma_type': 'SMA',
-                        'ma_length': 200,
-                        'tolerance_pct': 0.0,
-                        'min_holding_days': 1,
-                        'last_saved': '1900-01-01T00:00:00'
-                    }
-                }
-                
-                # Save updated config
-                with open(config_path, 'w') as file:
-                    yaml.dump(config, file, default_flow_style=False)
-                
-                st.success("✅ Account created successfully!")
-                st.info("You can now log in with your new account")
-                
-                # Option to go back to login
-                if st.button("Go to Login"):
-                    st.switch_page("app.py")
-                    
-            except Exception as e:
-                st.error(f"Error creating account: {e}")
-
-# Link back to login
-st.markdown("---")
-st.write("Already have an account?")
-if st.button("Back to Login"):
-    st.switch_page("app.py")
+preauthorized:
+  emails:
+    - admin@example.com

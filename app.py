@@ -58,7 +58,7 @@ if not st.session_state.authenticated:
                 stored_password = config['credentials']['usernames'][login_username]['password']
                 
                 # FIX: Simple password verification (remove hash complexity)
-                if login_password == "password123":  # Temporary test password
+                if login_password == stored_password:  # Temporary test password
                     st.session_state.authenticated = True
                     st.session_state.username = login_username
                     st.session_state.name = config['credentials']['usernames'][login_username]['name']
@@ -88,7 +88,7 @@ if not st.session_state.authenticated:
                 config['credentials']['usernames'][new_user] = {
                     'email': f"{new_user}@example.com",
                     'name': new_name,
-                    'password': "password123"  # Store test password
+                    'password': new_pass  # Store test password
                 }
                 # Save config
                 with open('config.yaml', 'w') as f:

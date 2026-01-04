@@ -5,51 +5,75 @@ import matplotlib.pyplot as plt
 import streamlit as st
 import datetime
 from scipy.optimize import minimize
-import yaml
-from yaml.loader import SafeLoader
 import streamlit_authenticator as stauth
 import json
 import os
 import bcrypt
-
-# ============================================================
-# LOAD AUTH CONFIG (REQUIRED FOR AUTHENTICATOR)
-# ============================================================
-
-if not os.path.exists("config.yaml"):
-    with open("config.yaml", "w") as f:
-        yaml.dump(
-            {
-                "credentials": {"usernames": {}},
-                "cookie": {
-                    "name": "portfolio_app",
-                    "key": "temporary-key-change-later-123",
-                    "expiry_days": 30,
-                },
-            },
-            f,
-        )
-
-with open("config.yaml") as file:
-    config = yaml.load(file, Loader=SafeLoader)
+import sqlite3
+import secrets
+import hashlib
+from datetime import datetime, timedelta
     
 # ============================================================
 # OPEN SIGNUP HELPERS (OPTION 3)
 # ============================================================
 
+DB_PATH = "users.db"
+
+def get_db():
+    return sqlite3.connect(DB_PATH, check_same_thread=False)
+
+def init_auth_db():
+    with get_db() as conn:
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            username TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            email_verified INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS password_resets (
+            token_hash TEXT PRIMARY KEY,
+            username TEXT NOT NULL,
+            expires_at TIMESTAMP NOT NULL
+        )
+        """)
+
+init_auth_db()
+
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
-def username_exists(username: str) -> bool:
-    return username in config["credentials"]["usernames"]
+def verify_password(password, hashed):
+    return bcrypt.checkpw(password.encode(), hashed.encode())
 
-def create_user(username: str, name: str, password: str):
-    config["credentials"]["usernames"][username] = {
-        "name": name,
-        "password": hash_password(password),
-    }
-    with open("config.yaml", "w") as f:
-        yaml.dump(config, f)
+def get_user(username):
+    with get_db() as conn:
+        return conn.execute(
+            "SELECT username, name, email, password_hash, email_verified FROM users WHERE username = ?",
+            (username,)
+        ).fetchone()
+
+def username_exists(username):
+    return get_user(username) is not None
+
+def email_exists(email):
+    with get_db() as conn:
+        return conn.execute(
+            "SELECT 1 FROM users WHERE email = ?",
+            (email,)
+        ).fetchone() is not None
+
+def create_user(username, name, email, password):
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO users (username, name, email, password_hash) VALUES (?, ?, ?, ?)",
+            (username, name, email, hash_password(password))
+        )
 
 # ============================================================
 # USER DATA PERSISTENCE (DISK-BACKED)
@@ -91,11 +115,22 @@ def save_user_prefs(username, prefs):
 # AUTHENTICATION (COOKIE-PERSISTENT)
 # ============================================================
 
+def load_auth_credentials():
+    creds = {"usernames": {}}
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT username, name, password_hash FROM users WHERE email_verified = 1"
+        ).fetchall()
+
+    for u, n, p in rows:
+        creds["usernames"][u] = {"name": n, "password": p}
+    return creds
+
 authenticator = stauth.Authenticate(
-    config["credentials"],
-    config["cookie"]["name"],
-    config["cookie"]["key"],
-    config["cookie"]["expiry_days"],
+    load_auth_credentials(),
+    "portfolio_app",
+    st.secrets["COOKIE_KEY"],
+    30,
 )
 
 login_tab, signup_tab = st.tabs(["Login", "Create Account"])
@@ -111,11 +146,12 @@ with signup_tab:
 
     new_username = st.text_input("Username")
     new_name = st.text_input("Full Name")
+    new_email = st.text_input("Email")
     new_password = st.text_input("Password", type="password")
     new_password_confirm = st.text_input("Confirm Password", type="password")
 
     if st.button("Create Account"):
-        if not new_username or not new_name or not new_password:
+        if not new_username or not new_name or not new_email or not new_password:
             st.error("All fields are required")
             st.stop()
 
@@ -127,7 +163,13 @@ with signup_tab:
             st.error("Username already exists")
             st.stop()
 
-        create_user(new_username, new_name, new_password)
+    if email_exists(new_email):
+            st.error("Email already registered")
+            st.stop()
+
+    create_user(new_username, new_name, new_email, new_password)
+    st.success("Account created. Please verify your email before logging in.")
+    st.stop()
         st.success("Account created successfully. Please log in.")
         st.rerun()
         

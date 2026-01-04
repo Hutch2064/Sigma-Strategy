@@ -1783,7 +1783,7 @@ def main():
     # MONTE CARLO STRESS TESTING - 12-MONTH FORECAST (CORRECTED)
     # ============================================================
     
-    st.subheader("🎯 Monte Carlo Stress Testing - 12-Month Forward Forecast")
+    st.subheader("Monte Carlo Stress Testing - Next 12-Month Simulation")
     
     # Get total current portfolio value from user inputs - only ONE portfolio now
     total_current_portfolio = real_cap_1
@@ -1829,7 +1829,7 @@ def main():
     
     # Display portfolio value info
     st.write(f"**Current Total Portfolio Value:** ${total_current_portfolio:,.2f}")
-    st.write(f"**Monte Carlo Projection Horizon:** 12 months (252 trading days)")
+    st.write(f"**Monte Carlo Simulation Horizon:** 12 months (252 trading days)")
     st.write(f"**Number of Simulations:** 100,000 per strategy")
     
     # Display Monte Carlo results
@@ -1839,7 +1839,7 @@ def main():
         st.pyplot(mc_fig)
         
         # Display terminal value projections
-        st.subheader(" Next 12-Month Portfolio Value Projections")
+        st.subheader(" Next 12-Month Simulated-Value ")
         
         terminal_value_data = []
         for name, results in mc_results.items():
@@ -1860,7 +1860,7 @@ def main():
             st.dataframe(terminal_value_df, use_container_width=True)
         
         # Display return projections
-        st.subheader("Next 12-Month Return Projections (%)")
+        st.subheader("Next 12-Month Simulated-Returns(%)")
         
         return_data = []
         for name, results in mc_results.items():

@@ -849,103 +849,103 @@ def main():
 
     
     # ============================================================
-# LOGIN / SIGNUP / RESET GATE
-# ============================================================
+    # LOGIN / SIGNUP / RESET GATE
+    # ============================================================
 
-name, authentication_status, username = authenticator.login("Login", "main")
+    name, authentication_status, username = authenticator.login("Login", "main")
 
-st.session_state["authentication_status"] = authentication_status
+    st.session_state["authentication_status"] = authentication_status
 
-if authentication_status is False:
-    st.error("Invalid username or password")
-    st.stop()
-
-if authentication_status is None:
-    st.markdown("### Forgot Password?")
-    reset_email = st.text_input("Enter your email")
-
-    if st.button("Send Reset Link"):
-        with get_db() as conn:
-            row = conn.execute(
-                "SELECT username FROM users WHERE email = ? AND email_verified = 1",
-                (reset_email,)
-            ).fetchone()
-
-        if row:
-            token = create_token(row[0])
-            reset_link = f"{st.secrets['APP_URL']}?reset={token}"
-            send_email(
-                reset_email,
-                "Reset your password",
-                f"<p><a href='{reset_link}'>Reset Password</a></p>"
-            )
-
-        st.success("If the email exists, a reset link was sent.")
-
-    st.markdown("---")
-    st.markdown("### Create Account")
-
-    new_username = st.text_input("Username")
-    new_name = st.text_input("Full Name")
-    new_email = st.text_input("Email")
-    new_pw = st.text_input("Password", type="password")
-    new_pw2 = st.text_input("Confirm Password", type="password")
-
-    if st.button("Create Account"):
-        if not new_username or not new_name or not new_email or not new_pw:
-            st.error("All fields required")
-            st.stop()
-
-        if new_pw != new_pw2:
-            st.error("Passwords do not match")
-            st.stop()
-
-        if username_exists(new_username):
-            st.error("Username already exists")
-            st.stop()
-
-        if email_exists(new_email):
-            st.error("Email already registered")
-            st.stop()
-
-        create_user(new_username, new_name, new_email, new_pw)
-        token = create_token(new_username, minutes=60)
-        verify_link = f"{st.secrets['APP_URL']}?verify={token}"
-
-        send_email(
-            new_email,
-            "Verify your email",
-            f"<p><a href='{verify_link}'>Verify Email</a></p>"
-        )
-
-        st.success("Account created. Check your email.")
+    if authentication_status is False:
+        st.error("Invalid username or password")
         st.stop()
 
-    st.stop()
+    if authentication_status is None:
+        st.markdown("### Forgot Password?")
+        reset_email = st.text_input("Enter your email")
 
-# ============================================================
-# AUTHENTICATED USER CONTEXT
-# ============================================================
+        if st.button("Send Reset Link"):
+            with get_db() as conn:
+                row = conn.execute(
+                    "SELECT username FROM users WHERE email = ? AND email_verified = 1",
+                    (reset_email,)
+                ).fetchone()
 
-st.session_state["name"] = name
-st.session_state["username"] = username
+            if row:
+                token = create_token(row[0])
+                reset_link = f"{st.secrets['APP_URL']}?reset={token}"
+                send_email(
+                    reset_email,
+                    "Reset your password",
+                    f"<p><a href='{reset_link}'>Reset Password</a></p>"
+                )
 
-if "prefs" not in st.session_state:
-    st.session_state.prefs = load_user_prefs(username)
+            st.success("If the email exists, a reset link was sent.")
 
-st.sidebar.title(f"Welcome {name}!")
+        st.markdown("---")
+        st.markdown("### Create Account")
 
+        new_username = st.text_input("Username")
+        new_name = st.text_input("Full Name")
+        new_email = st.text_input("Email")
+        new_pw = st.text_input("Password", type="password")
+        new_pw2 = st.text_input("Confirm Password", type="password")
 
-    
-    if st.session_state.get("authentication_status"):
-        authenticator.logout("Logout", "sidebar")
+        if st.button("Create Account"):
+            if not new_username or not new_name or not new_email or not new_pw:
+                st.error("All fields required")
+                st.stop()
 
-    
+            if new_pw != new_pw2:
+                st.error("Passwords do not match")
+                st.stop()
+
+            if username_exists(new_username):
+                st.error("Username already exists")
+                st.stop()
+
+            if email_exists(new_email):
+                st.error("Email already registered")
+                st.stop()
+
+            create_user(new_username, new_name, new_email, new_pw)
+            token = create_token(new_username, minutes=60)
+            verify_link = f"{st.secrets['APP_URL']}?verify={token}"
+
+            send_email(
+                new_email,
+                "Verify your email",
+                f"<p><a href='{verify_link}'>Verify Email</a></p>"
+            )
+
+            st.success("Account created. Check your email.")
+            st.stop()
+
+        st.stop()
+
+    # ============================================================
+    # AUTHENTICATED USER CONTEXT
+    # ============================================================
+
+    st.session_state["name"] = name
+    st.session_state["username"] = username
+
+    if "prefs" not in st.session_state:
+        st.session_state.prefs = load_user_prefs(username)
+
+    st.sidebar.title(f"Welcome {name}!")
+
+    authenticator.logout("Logout", "sidebar")
+
+    # ============================================================
+    # MAIN APPLICATION BODY
+    # ============================================================
+
     show_strategy_overview()
     st.markdown("---")
-    
-    # --- SIDEBAR INPUTS ---
+
     st.sidebar.header("Strategy Settings")
+
     
     # Load saved prefs
     prefs = st.session_state.prefs

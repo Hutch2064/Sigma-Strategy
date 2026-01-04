@@ -46,6 +46,7 @@ A "Risk Off Regime" = 200 Day SMA > Risk On Allocation Index.
 - If the 200 Day SMA < Risk On Allocation Index, then the model runs the SIG System as instructed above.
 - If the 200 Day SMA > Risk On Allocation Index, then the model allocates all portfolio capital to the Risk Off Allocation.
 - When model flips from "Risk Off" to "Risk On", the model refers to the Allocation Tables and resumes the current SIG System weights.
+""")
 
 # ============================================================
 # AUTHENTICATION SETUP
@@ -109,7 +110,7 @@ class PortfolioPreferences:
             "ma_type": "SMA",
             "ma_length": 200,  # Fixed at 200
             "tolerance_pct": 0.0,
-            "min_holding_days": 0,  
+            "min_holding_days": 2,  # New: Minimum holding period after regime change
         } 
     
     

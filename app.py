@@ -1471,9 +1471,9 @@ def main():
 
     if gap > 0:
         # Use Markdown bold syntax **text** instead of HTML
-        message = f"**Portfolio:** **Sell {dollar_amount}** of Risk Off Assets and **Buy {dollar_amount}** of Risk On Assets on **{date_str}** ({days_str})"
+        message = f"**Portfolio:** **Sell {dollar_amount}** of the Risk Off Allocation and **Buy {dollar_amount}** of the Risk On Allocation on **{date_str}** ({days_str})"
     elif gap < 0:
-        message = f"**Portfolio:** **Sell {dollar_amount}** of Risk On Assets and **Buy {dollar_amount}** of Risk Off Assets on **{date_str}** ({days_str})"
+        message = f"**Portfolio:** **Sell {dollar_amount}** of the Risk On Allocation and **Buy {dollar_amount}** of Risk Off Allocation on **{date_str}** ({days_str})"
     else:
         message = f"**Portfolio:** No rebalance needed until **{date_str}** ({days_str})"
 

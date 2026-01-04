@@ -1197,7 +1197,7 @@ def main():
     latest_signal = sig.iloc[-1]
     current_regime = "Risk On" if latest_signal else "Risk Off"
 
-    st.subheader(f"Current MA Regime: {current_regime}")
+    st.subheader(f"Current 200 Day SMA Regime: {current_regime}")
 
     perf = best_result["performance"]
 

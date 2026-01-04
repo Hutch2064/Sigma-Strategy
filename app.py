@@ -93,10 +93,16 @@ def create_token(username, minutes=30):
 
     with get_db() as conn:
         conn.execute(
+            "DELETE FROM password_resets WHERE username = ?",
+            (username,)
+        )
+        conn.execute(
             "INSERT INTO password_resets (token_hash, username, expires_at) VALUES (?, ?, ?)",
             (token_hash, username, expires)
         )
+
     return raw
+
 
 def validate_token(raw_token):
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
@@ -174,92 +180,6 @@ authenticator = stauth.Authenticate(
     st.secrets["COOKIE_KEY"],
     30,
 )
-
-login_tab, signup_tab = st.tabs(["Login", "Create Account"])
-
-with login_tab:
-    name, authentication_status, username = authenticator.login("Login", "main")
-        
-    st.markdown("#### Forgot Password?")
-    reset_email = st.text_input("Enter your email to reset password", key="reset_email")
-
-    if st.button("Send Reset Link"):
-        with get_db() as conn:
-            row = conn.execute(
-                "SELECT username FROM users WHERE email = ? AND email_verified = 1",
-                (reset_email,)
-            ).fetchone()
-
-        if row:
-            token = create_token(row[0], minutes=30)
-            reset_link = f"{st.secrets['APP_URL']}?reset={token}"
-
-            send_email(
-                reset_email,
-                "Reset your password",
-                f"""
-                <p>Click the link below to reset your password:</p>
-                <p><a href="{reset_link}">Reset Password</a></p>
-                <p>This link expires in 30 minutes.</p>
-                """
-            )
-
-        st.success("If the email exists, a reset link has been sent.")
-
-with signup_tab:
-    st.subheader("Create Account")
-
-    new_username = st.text_input("Username")
-    new_name = st.text_input("Full Name")
-    new_email = st.text_input("Email")
-    new_password = st.text_input("Password", type="password")
-    new_password_confirm = st.text_input("Confirm Password", type="password")
-
-    if st.button("Create Account"):
-        if not new_username or not new_name or not new_email or not new_password:
-            st.error("All fields are required")
-            st.stop()
-
-        if new_password != new_password_confirm:
-            st.error("Passwords do not match")
-            st.stop()
-
-        if username_exists(new_username):
-            st.error("Username already exists")
-            st.stop()
-
-        if email_exists(new_email):
-            st.error("Email already registered")
-            st.stop()
-
-        create_user(new_username, new_name, new_email, new_password)
-
-        token = create_token(new_username, minutes=60)
-        verify_link = f"{st.secrets['APP_URL']}?verify={token}"
-
-        send_email(
-            new_email,
-            "Verify your email",
-            f"""
-            <p>Welcome to Sigma Strategy.</p>
-            <p>Please verify your email by clicking the link below:</p>
-            <p><a href="{verify_link}">Verify Email</a></p>
-            <p>This link expires in 60 minutes.</p>
-            """
-        )
-
-        st.success("Account created. Check your email to verify before logging in.")
-        st.stop()
-        
-if authentication_status is not True:
-    st.stop()
-
-st.session_state.username = username
-st.session_state.name = name
-
-# Load persisted user preferences once per session
-if "prefs" not in st.session_state:
-    st.session_state.prefs = load_user_prefs(username)
 
 # ============================================================
 # YOUR STRATEGY FUNCTIONS
@@ -882,7 +802,7 @@ def plot_monte_carlo_results(results_dict, strategy_names):
 
 def main():
     st.set_page_config(page_title="Portfolio MA Regime Strategy", layout="wide")
-
+        
     # ============================================================
     # EMAIL VERIFY / PASSWORD RESET ROUTING
     # ============================================================
@@ -929,8 +849,9 @@ def main():
 
     
     # Get user info from session state
-    name = st.session_state.get('name', 'User')
-    username = st.session_state.get('username', 'user')
+    name = st.session_state["name"]
+    username = st.session_state["username"]
+
     
     # User is authenticated at this point
     st.sidebar.title(f"Welcome {name}!")

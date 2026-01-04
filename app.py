@@ -110,7 +110,7 @@ class PortfolioPreferences:
             "ma_type": "SMA",
             "ma_length": 200,  # Fixed at 200
             "tolerance_pct": 0.0,
-            "min_holding_days": 2,  # New: Minimum holding period after regime change
+            "min_holding_days": 1,  # New: Minimum holding period after regime change
         } 
     
     
@@ -1062,7 +1062,7 @@ def main():
     # MINIMUM HOLDING PERIOD
     min_holding_days = st.sidebar.number_input(
         "Confirmation Days",
-        min_value=0,
+        min_value=1,
         max_value=365,
         value=int(user_prefs["min_holding_days"]),
         step=1,

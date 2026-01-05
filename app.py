@@ -3,501 +3,192 @@ import pandas as pd
 import yfinance as yf
 import matplotlib.pyplot as plt
 import streamlit as st
-import bcrypt
+import yaml
+from yaml.loader import SafeLoader
+import streamlit_authenticator as stauth
 import json
 import os
 import sqlite3
-import secrets
-import hashlib
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from datetime import datetime, timedelta
-import streamlit.components.v1 as components
+import bcrypt
+from datetime import datetime
 
 # ============================================================
-# DATABASE SETUP (Production Ready)
+# SIMPLE YFINANCE LOADER (PROVEN WORKING VERSION)
 # ============================================================
 
-DB_PATH = "users.db"
-USER_DATA_DIR = "user_data"
-os.makedirs(USER_DATA_DIR, exist_ok=True)
-PRICE_CACHE_DIR = "price_cache"
-os.makedirs(PRICE_CACHE_DIR, exist_ok=True)
+@st.cache_data(show_spinner=True, ttl=3600)
+def load_price_data(tickers, start_date, end_date=None):
+    """
+    Simple yfinance download - exactly like your working old code
+    """
+    data = yf.download(
+        tickers, 
+        start=start_date, 
+        end=end_date, 
+        progress=False
+    )
+
+    if "Adj Close" in data.columns:
+        px = data["Adj Close"].copy()
+    else:
+        px = data["Close"].copy()
+
+    if isinstance(px, pd.Series):
+        px = px.to_frame(name=tickers[0])
+
+    return px.dropna(how="all")
+
+# ============================================================
+# SQLITE DATABASE FOR USER STORAGE (SCALABLE)
+# ============================================================
+
+DB_PATH = "users_production.db"
 
 def get_db():
-    """Get database connection with proper isolation"""
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
     return conn
 
-def init_auth_db():
-    """Initialize database with proper indexes"""
+def init_user_db():
+    """Initialize SQLite database for user storage"""
     with get_db() as conn:
-        # Users table
         conn.execute("""
         CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             email TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
-            email_verified INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_login TIMESTAMP,
             is_active INTEGER DEFAULT 1
         )
         """)
         
-        # Password resets
         conn.execute("""
-        CREATE TABLE IF NOT EXISTS password_resets (
-            token_hash TEXT PRIMARY KEY,
-            username TEXT NOT NULL,
-            expires_at TIMESTAMP NOT NULL,
-            FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
-        )
+        CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)
         """)
-        
-        # Login attempts (for rate limiting)
-        conn.execute("""
-        CREATE TABLE IF NOT EXISTS login_attempts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT,
-            ip_address TEXT,
-            attempt_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            success INTEGER DEFAULT 0
-        )
-        """)
-        
-        # Persistent auth tokens
-        conn.execute("""
-        CREATE TABLE IF NOT EXISTS auth_tokens (
-            token_hash TEXT PRIMARY KEY,
-            username TEXT NOT NULL,
-            expires_at TIMESTAMP NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
-        )
-        """)
-        
-        # Create indexes
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_password_resets_expires ON password_resets(expires_at)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_login_attempts_time ON login_attempts(attempt_time)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_auth_tokens_expires ON auth_tokens(expires_at)")
-        
-init_auth_db()
+
+init_user_db()
 
 # ============================================================
-# FIXED: ENHANCED PRICE DATA LOADING FUNCTION
+# PASSWORD HASHING FUNCTIONS
 # ============================================================
 
-def load_price_data(tickers, start_date, end_date=None):
-    """
-    Enhanced price loading with better error handling
-    """
-    # Handle single ticker case
-    if isinstance(tickers, str):
-        tickers = [tickers]
-    
-    # Remove any empty tickers
-    tickers = [t for t in tickers if t and str(t).strip()]
-    
-    if not tickers:
-        return pd.DataFrame()
-    
-    try:
-        # Try downloading with auto_adjust=True first
-        data = yf.download(
-            tickers, 
-            start=start_date, 
-            end=end_date, 
-            progress=False,
-            auto_adjust=True,
-            threads=True
-        )
-        
-        # Handle different data structures
-        if data.empty:
-            st.warning(f"No data found for tickers: {tickers}")
-            return pd.DataFrame()
-        
-        # Get price data
-        if isinstance(tickers, list) and len(tickers) > 1:
-            # Multiple tickers - get Close prices
-            if 'Close' in data.columns:
-                prices = data['Close'].copy()
-            else:
-                # If multi-index columns, find close prices
-                prices = data.xs('Close', axis=1, level=0, drop_level=True).copy()
-        else:
-            # Single ticker
-            if 'Close' in data.columns:
-                prices = data['Close'].copy()
-            else:
-                prices = data.copy()
-                if isinstance(prices, pd.Series):
-                    prices = prices.to_frame(name=tickers[0])
-        
-        # Forward fill and drop NaN
-        prices = prices.ffill().dropna()
-        
-        if prices.empty:
-            # Try alternative method for problematic tickers
-            st.warning(f"Alternative download attempt for: {tickers}")
-            prices_list = []
-            for ticker in tickers:
-                try:
-                    ticker_obj = yf.Ticker(ticker)
-                    hist = ticker_obj.history(start=start_date, end=end_date, auto_adjust=True)
-                    if not hist.empty:
-                        prices_list.append(hist['Close'].rename(ticker))
-                except Exception as e:
-                    st.warning(f"Could not download {ticker}: {str(e)}")
-            
-            if prices_list:
-                prices = pd.concat(prices_list, axis=1)
-                prices = prices.ffill().dropna()
-        
-        return prices
-        
-    except Exception as e:
-        st.error(f"Error downloading price data: {str(e)}")
-        return pd.DataFrame()
-
-# ============================================================
-# FIXED: ENHANCED CACHE FUNCTION WITH BETTER ERROR HANDLING
-# ============================================================
-
-def _price_cache_path(tickers, start, end):
-    if isinstance(tickers, str):
-        tickers = [tickers]
-    key = "_".join(sorted(tickers)) + f"_{start}_{end or 'latest'}"
-    safe_key = hashlib.md5(key.encode()).hexdigest()
-    return os.path.join(PRICE_CACHE_DIR, f"{safe_key}.parquet")
-
-@st.cache_data(show_spinner=False, ttl=3600*24)  # Cache for 24 hours
-def load_price_data_cached(tickers, start_date, end_date=None):
-    """Cache wrapper for price data"""
-    cache_path = _price_cache_path(tickers, start_date, end_date)
-    
-    # Check cache first
-    if os.path.exists(cache_path):
-        try:
-            cached_data = pd.read_parquet(cache_path)
-            if not cached_data.empty:
-                return cached_data
-        except Exception as e:
-            st.warning(f"Cache read error, re-downloading: {str(e)}")
-            os.remove(cache_path)  # Remove corrupted cache
-    
-    # Download fresh data
-    prices = load_price_data(tickers, start_date, end_date)
-    
-    if not prices.empty:
-        try:
-            prices.to_parquet(cache_path)
-        except Exception as e:
-            st.warning(f"Could not save cache: {str(e)}")
-    
-    return prices
-
-# ============================================================
-# SECURITY & AUTHENTICATION FUNCTIONS
-# ============================================================
-AUTH_TOKEN_DAYS = 30
-
-def create_auth_token(username: str) -> str:
-    raw = secrets.token_urlsafe(48)
-    token_hash = hashlib.sha256(raw.encode()).hexdigest()
-    expires = datetime.utcnow() + timedelta(days=AUTH_TOKEN_DAYS)
-
-    with get_db() as conn:
-        # Clean old tokens for this user
-        conn.execute(
-            "DELETE FROM auth_tokens WHERE username = ? OR expires_at < ?",
-            (username, datetime.utcnow())
-        )
-        conn.execute(
-            """INSERT INTO auth_tokens (token_hash, username, expires_at)
-               VALUES (?, ?, ?)""",
-            (token_hash, username, expires)
-        )
-    return raw
-
-def validate_auth_token(raw_token: str):
-    if not raw_token:
-        return None
-    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
-    now = datetime.utcnow()
-
-    with get_db() as conn:
-        row = conn.execute(
-            """SELECT username FROM auth_tokens
-               WHERE token_hash = ? AND expires_at > ?""",
-            (token_hash, now)
-        ).fetchone()
-
-    return row[0] if row else None
-
-def revoke_auth_token(raw_token: str):
-    if not raw_token:
-        return
-    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
-    with get_db() as conn:
-        conn.execute(
-            "DELETE FROM auth_tokens WHERE token_hash = ?",
-            (token_hash,)
-        )
-
-def revoke_all_user_tokens(username: str):
-    """Revoke all tokens for a user"""
-    with get_db() as conn:
-        conn.execute(
-            "DELETE FROM auth_tokens WHERE username = ?",
-            (username,)
-        )
-
-def hash_password(password: str) -> str:
-    """Hash password with bcrypt"""
+def hash_password_bcrypt(password: str) -> str:
+    """Hash password with bcrypt for secure storage"""
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
-def verify_password(password: str, hashed: str) -> bool:
-    """Verify password against hash"""
+def verify_password_bcrypt(password: str, hashed: str) -> bool:
+    """Verify password against bcrypt hash"""
     try:
         return bcrypt.checkpw(password.encode(), hashed.encode())
     except:
         return False
 
-def get_user(username: str):
-    """Get user by username"""
+# ============================================================
+# USER MANAGEMENT IN SQLITE
+# ============================================================
+
+def create_user_in_db(username: str, name: str, email: str, password: str) -> bool:
+    """Create new user in SQLite database"""
+    try:
+        with get_db() as conn:
+            conn.execute(
+                """INSERT INTO users (username, name, email, password_hash, last_login) 
+                   VALUES (?, ?, ?, ?, ?)""",
+                (username, name, email, hash_password_bcrypt(password), datetime.now())
+            )
+        return True
+    except Exception as e:
+        st.error(f"Error creating user: {str(e)}")
+        return False
+
+def get_user_from_db(username: str):
+    """Get user from SQLite database"""
     with get_db() as conn:
         return conn.execute(
-            """SELECT username, name, email, password_hash, email_verified, 
-                      is_active, created_at, last_login 
+            """SELECT username, name, email, password_hash, is_active, last_login 
                FROM users WHERE username = ?""",
             (username,)
         ).fetchone()
 
-def username_exists(username: str) -> bool:
-    """Check if username exists"""
-    return get_user(username) is not None
+def username_exists_in_db(username: str) -> bool:
+    """Check if username exists in database"""
+    return get_user_from_db(username) is not None
 
-def email_exists(email: str) -> bool:
-    """Check if email exists"""
+def email_exists_in_db(email: str) -> bool:
+    """Check if email exists in database"""
     with get_db() as conn:
         return conn.execute(
             "SELECT 1 FROM users WHERE email = ?",
             (email,)
         ).fetchone() is not None
 
-def create_user(username: str, name: str, email: str, password: str):
-    """Create new user (email verification disabled)"""
-    with get_db() as conn:
-        conn.execute(
-            """INSERT INTO users (username, name, email, password_hash, email_verified) 
-               VALUES (?, ?, ?, ?, 1)""",
-            (username, name, email, hash_password(password))
-        )
-
-def update_last_login(username: str):
+def update_last_login_in_db(username: str):
     """Update user's last login time"""
     with get_db() as conn:
         conn.execute(
-            "UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE username = ?",
-            (username,)
+            "UPDATE users SET last_login = ? WHERE username = ?",
+            (datetime.now(), username)
         )
-
-def create_token(username: str, minutes: int = 30) -> str:
-    """Create verification/reset token"""
-    raw = secrets.token_urlsafe(32)
-    token_hash = hashlib.sha256(raw.encode()).hexdigest()
-    expires = datetime.utcnow() + timedelta(minutes=minutes)
-
-    with get_db() as conn:
-        # Clean old tokens
-        conn.execute(
-            "DELETE FROM password_resets WHERE username = ? OR expires_at < ?",
-            (username, datetime.utcnow())
-        )
-        conn.execute(
-            """INSERT INTO password_resets (token_hash, username, expires_at) 
-               VALUES (?, ?, ?)""",
-            (token_hash, username, expires)
-        )
-    return raw
-
-def validate_token(raw_token: str):
-    """Validate token and return username if valid"""
-    if not raw_token:
-        return None
-    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
-    now = datetime.utcnow()
-
-    with get_db() as conn:
-        row = conn.execute(
-            """SELECT username FROM password_resets 
-               WHERE token_hash = ? AND expires_at > ?""",
-            (token_hash, now)
-        ).fetchone()
-    return row[0] if row else None
-
-def consume_token(username: str):
-    """Remove used token"""
-    with get_db() as conn:
-        conn.execute(
-            "DELETE FROM password_resets WHERE username = ?",
-            (username,)
-        )
-
-def send_email_simple(to_email: str, subject: str, html_body: str):
-    """Simple email sending function (replace with your email service)"""
-    try:
-        # Using environment variables for email configuration
-        smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-        smtp_port = int(os.getenv("SMTP_PORT", 587))
-        smtp_user = os.getenv("SMTP_USER", "")
-        smtp_password = os.getenv("SMTP_PASSWORD", "")
-        from_email = os.getenv("FROM_EMAIL", "noreply@yourdomain.com")
-        
-        if not all([smtp_user, smtp_password]):
-            st.warning("Email not configured. Please set SMTP environment variables.")
-            return False
-            
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"] = from_email
-        msg["To"] = to_email
-
-        # Plain-text fallback
-        text_part = MIMEText(
-            "This email was sent to verify your Sigma System account. "
-            "If you did not create an account, you can ignore this email.",
-            "plain",
-        )
-
-        # HTML version
-        html_part = MIMEText(html_body, "html")
-
-        msg.attach(text_part)
-        msg.attach(html_part)
-        
-        with smtplib.SMTP(smtp_server, smtp_port) as server:
-            server.starttls()
-            server.login(smtp_user, smtp_password)
-            server.send_message(msg)
-        return True
-    except Exception as e:
-        st.error(f"Email sending failed: {str(e)}")
-        return False
 
 # ============================================================
-# FIXED: SESSION STATE INITIALIZATION
+# SYNC SQLITE TO AUTHENTICATOR CONFIG
 # ============================================================
 
-def initialize_session_state():
-    """Initialize all session state variables"""
-    defaults = {
-        "authenticated": False,
-        "username": None,
-        "name": None,
-        "auth_token": None,
-        "prefs_loaded": False,
-        "prefs": None,
-        "last_activity": None,
-        "page_loaded": False
+def sync_db_to_authenticator():
+    """
+    Sync users from SQLite to streamlit-authenticator config
+    This bridges SQLite storage with authenticator's cookie system
+    """
+    # Initialize empty config if file doesn't exist
+    config = {
+        "credentials": {"usernames": {}},
+        "cookie": {
+            "name": "sigma_portfolio_auth",
+            "key": "super-secret-key-change-in-production-12345",
+            "expiry_days": 30,
+        },
     }
     
-    for key, default_value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = default_value
-
-# ============================================================
-# FIXED: RESTORE SESSION FROM TOKEN
-# ============================================================
-
-def restore_session_from_token():
-    """Restore session from auth token"""
-    # Don't restore if already authenticated
-    if st.session_state.get("authenticated", False):
-        return True
+    # Load existing config if it exists
+    if os.path.exists("auth_config.yaml"):
+        with open("auth_config.yaml") as file:
+            existing_config = yaml.load(file, Loader=SafeLoader)
+            if existing_config:
+                config = existing_config
     
-    # Check for token in query params
-    params = st.query_params
-    if "auth_token" in params:
-        token = params["auth_token"]
-        st.session_state.auth_token = token
+    # Get all users from SQLite
+    users_dict = {}
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT username, name, password_hash, is_active FROM users WHERE is_active = 1"
+        ).fetchall()
         
-    # Check session state token
-    token = st.session_state.get("auth_token")
-    if not token:
-        return False
+        for username, name, password_hash, is_active in rows:
+            if is_active:
+                users_dict[username] = {
+                    "name": name,
+                    "password": password_hash  # Already bcrypt hashed
+                }
     
-    username = validate_auth_token(token)
-    if not username:
-        return False
+    # Update config with SQLite users
+    config["credentials"]["usernames"] = users_dict
     
-    user = get_user(username)
-    if user and user[5] == 1:  # is_active check
-        st.session_state.update({
-            "authenticated": True,
-            "username": username,
-            "name": user[1],
-            "last_activity": datetime.now()
-        })
-        
-        # Load preferences
-        if not st.session_state.get("prefs_loaded", False):
-            st.session_state.prefs = load_user_prefs(username)
-            st.session_state.prefs_loaded = True
-            
-        return True
+    # Save config file
+    with open("auth_config.yaml", "w") as f:
+        yaml.dump(config, f, default_flow_style=False)
     
-    return False
-
-# ============================================================
-# FIXED: SYNC TOKEN TO/FROM BROWSER
-# ============================================================
-
-def sync_auth_token_to_browser(token):
-    """Inject JavaScript to store token in localStorage"""
-    components.html(
-        f"""
-        <script>
-        const token = "{token}";
-        if (token && token.length > 10) {{
-            localStorage.setItem("sigma_auth_token", token);
-            console.log("Token stored in localStorage");
-        }}
-        </script>
-        """,
-        height=0
-    )
-
-def sync_auth_token_from_browser():
-    """Read token from localStorage and update session state"""
-    components.html(
-        """
-        <script>
-        const token = localStorage.getItem("sigma_auth_token");
-        if (token) {
-            window.parent.postMessage({
-                type: "STREAMLIT_TOKEN",
-                token: token
-            }, "*");
-        }
-        </script>
-        """,
-        height=0
-    )
+    return config
 
 # ============================================================
 # USER DATA PERSISTENCE
 # ============================================================
 
+USER_DATA_DIR = "user_data"
+os.makedirs(USER_DATA_DIR, exist_ok=True)
+
 DEFAULT_PREFS = {
-    "start_date": "2010-01-01",  # Changed to more reasonable date
+    "start_date": "2010-01-01",
     "risk_on_tickers": "TQQQ",
     "risk_on_weights": "1.0",
     "risk_off_tickers": "AGG",
@@ -531,7 +222,7 @@ def save_user_prefs(username: str, prefs: dict):
         json.dump(prefs, f, indent=2)
 
 # ============================================================
-# TRADING STRATEGY FUNCTIONS (From your original code)
+# TRADING STRATEGY FUNCTIONS (FROM YOUR WORKING CODE)
 # ============================================================
 
 def show_strategy_overview():
@@ -539,52 +230,9 @@ def show_strategy_overview():
 ## **Sigma System Overview**
 
 An automated program that integrates the SIG System with the 200 Day Simple Moving Average Strategy. 
-
----
-
-### **The SIG System:**
-
-**Quarterly Target Growth Rate (QTGR):**  
-Quarterly Growth Target (QGT): Quarterly growth rate derived from the historical returns of the user selected Risk On allocation (e.g., 9sig = 9% QGT for TQQQ).
-
-- Is your Risk On Allocation above or below its quarterly growth target? If above, it's a sell signal. If below, it's a buy signal.
-- If the signal is a Risk On Allocation sell, you will move proceeds of the sale to your Risk Off Allocation in the following order of events: sell an amount of the Risk On Allocation, use that amount to buy more of the Risk Off Allocation. If the signal is a Risk On Allocation buy, you will generate buying power by selling a portion of your Risk Off Allocation, then use the proceeds to buy more of your Risk On Allocation, in the following order of events: sell a portion of the Risk Off Allocation, use the proceeds to buy the Risk On Allocation.
----
-
-### **The 200 Day Simple Moving Average Strategy (SMA or MA):**
-
-A 200 Day SMA is constructed using a simulated index of the user selected Risk On allocation.
-
-- If the 200 Day SMA < Risk On Allocation Index, then buy & hold the Risk On Allocation.
-- If the 200 Day SMA > Risk On Allocation Index, then sell & hold the Risk Off Allocation.
-
-A "Risk On Regime" = 200 Day SMA < Risk On Allocation Index.  
-A "Risk Off Regime" = 200 Day SMA > Risk On Allocation Index.
-
----
-
-### **Sigma System**
-
-- If the 200 Day SMA < Risk On Allocation Index, then the model runs the SIG System as instructed above.
-- If the 200 Day SMA > Risk On Allocation Index, then the model allocates all portfolio capital to the Risk Off Allocation.
-- When model flips from "Risk Off" to "Risk On", the model refers to the Allocation Tables and resumes the current SIG System weights.
 """)
 
-# CONFIG
-DEFAULT_START_DATE = "2010-01-01"  # Updated to reasonable date
-RISK_FREE_RATE = 0.0
-RISK_ON_WEIGHTS = {"TQQQ": 1.0}
-RISK_OFF_WEIGHTS = {"AGG": 1.0}
-FLIP_COST = 0.0000
-START_RISKY = 0.6
-START_SAFE  = 0.4
-
-# FIXED: Remove duplicate load_price_data function, using the enhanced one above
-
 def build_portfolio_index(prices, weights_dict, annual_drag_pct=0.0):
-    if prices.empty:
-        return pd.Series([1.0], index=[datetime.now().date()])
-    
     simple_rets = prices.pct_change().fillna(0)
     idx_rets = pd.Series(0.0, index=simple_rets.index)
 
@@ -611,9 +259,6 @@ def build_portfolio_index(prices, weights_dict, annual_drag_pct=0.0):
     return cumprod_filled
 
 def compute_ma(price_series, length, ma_type):
-    if price_series.empty:
-        return pd.Series([], dtype=float)
-    
     if ma_type.lower() == "ema":
         ma = price_series.ewm(span=length, adjust=False).mean()
     else:
@@ -622,9 +267,6 @@ def compute_ma(price_series, length, ma_type):
     return ma.shift(1)
 
 def generate_testfol_signal_vectorized(price, ma, tol_series, min_holding_days=5):
-    if price.empty or ma.empty:
-        return pd.Series(False, index=price.index if not price.empty else ma.index)
-    
     px = price.values
     ma_vals = ma.values
     n = len(px)
@@ -678,139 +320,12 @@ def generate_testfol_signal_vectorized(price, ma, tol_series, min_holding_days=5
     
     return pd.Series(sig, index=ma.index).fillna(False)
 
-def run_sig_engine(
-    risk_on_returns,
-    risk_off_returns,
-    target_quarter,
-    ma_signal,
-    pure_sig_rw=None,
-    pure_sig_sw=None,
-    flip_cost=FLIP_COST,
-    quarter_end_dates=None,
-    quarterly_multiplier=4.0,
-    ma_flip_multiplier=4.0
-):
-    if risk_on_returns.empty:
-        empty_series = pd.Series([], dtype=float)
-        return empty_series, empty_series, empty_series, []
-
-    dates = risk_on_returns.index
-    n = len(dates)
-
-    if quarter_end_dates is None:
-        raise ValueError("quarter_end_dates must be supplied")
-
-    quarter_end_set = set(quarter_end_dates)
-    sig_arr = ma_signal.astype(int)
-    flip_mask = sig_arr.diff().abs() == 1
-
-    eq = 10000.0
-    risky_val = eq * START_RISKY
-    safe_val  = eq * START_SAFE
-
-    frozen_risky = None
-    frozen_safe  = None
-
-    equity_curve = []
-    risky_w_series = []
-    safe_w_series = []
-    risky_val_series = []
-    safe_val_series = []
-    rebalance_events = 0
-    rebalance_dates = []
-
-    for i in range(n):
-        date = dates[i]
-        r_on = risk_on_returns.iloc[i]
-        r_off = risk_off_returns.iloc[i]
-        ma_on = bool(ma_signal.iloc[i])
-        
-        if i > 0 and flip_mask.iloc[i]:
-            eq *= (1 - flip_cost * ma_flip_multiplier)
-
-        if ma_on:
-            if frozen_risky is not None:
-                w_r = pure_sig_rw.iloc[i]
-                w_s = pure_sig_sw.iloc[i]
-                risky_val = eq * w_r
-                safe_val  = eq * w_s
-                frozen_risky = None
-                frozen_safe  = None
-
-            risky_val *= (1 + r_on)
-            safe_val  *= (1 + r_off)
-
-            if date in quarter_end_set:
-                prev_qs = [qd for qd in quarter_end_dates if qd < date]
-
-                if prev_qs:
-                    prev_q = prev_qs[-1]
-                    idx_prev = dates.get_loc(prev_q)
-                    risky_at_qstart = risky_val_series[idx_prev]
-                    goal_risky = risky_at_qstart * (1 + target_quarter)
-
-                    if risky_val > goal_risky:
-                        excess = risky_val - goal_risky
-                        risky_val -= excess
-                        safe_val  += excess
-                        rebalance_dates.append(date)
-
-                    elif risky_val < goal_risky:
-                        needed = goal_risky - risky_val
-                        move = min(needed, safe_val)
-                        safe_val -= move
-                        risky_val += move
-                        rebalance_dates.append(date)
-
-                    eq *= (1 - flip_cost * quarterly_multiplier)
-
-            eq = risky_val + safe_val
-            risky_w = risky_val / eq
-            safe_w  = safe_val  / eq
-
-        else:
-            if frozen_risky is None:
-                frozen_risky = risky_val
-                frozen_safe  = safe_val
-
-            eq *= (1 + r_off)
-            risky_w = 0.0
-            safe_w  = 1.0
-
-        equity_curve.append(eq)
-        risky_w_series.append(risky_w)
-        safe_w_series.append(safe_w)
-        risky_val_series.append(risky_val)
-        safe_val_series.append(safe_val)
-
-    return (
-        pd.Series(equity_curve, index=dates),
-        pd.Series(risky_w_series, index=dates),
-        pd.Series(safe_w_series, index=dates),
-        rebalance_dates
-    )
-
-def build_weight_df(prices, signal, risk_on_weights, risk_off_weights):
-    weights = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
-
-    for a, w in risk_on_weights.items():
-        if a in prices.columns:
-            weights.loc[signal, a] = w
-
-    for a, w in risk_off_weights.items():
-        if a in prices.columns:
-            weights.loc[~signal, a] = w
-
-    return weights
-
 def compute_enhanced_performance(simple_returns, eq_curve, rf=0.0):
     if len(eq_curve) == 0 or eq_curve.iloc[0] == 0:
         return {
             "CAGR": 0, "Volatility": 0, "Sharpe": 0, "MaxDrawdown": 0,
             "TotalReturn": 0, "DD_Series": pd.Series([], dtype=float),
-            "Calmar": 0, "Sortino": 0, "Omega": 0, "Skewness": 0,
-            "Kurtosis": 0, "VaR_95": 0, "CVaR_95": 0, "WinRate": 0,
-            "ProfitFactor": 0, "RecoveryFactor": 0, "UlcerIndex": 0, "TailRatio": 0
+            "Calmar": 0, "Sortino": 0, "Omega": 0
         }
     
     n_days = len(eq_curve)
@@ -821,573 +336,162 @@ def compute_enhanced_performance(simple_returns, eq_curve, rf=0.0):
     dd = eq_curve / eq_curve.cummax() - 1
     max_dd = dd.min() if len(dd) > 0 else 0
     
-    downside_returns = simple_returns[simple_returns < 0]
-    downside_dev = downside_returns.std() * np.sqrt(252) if len(downside_returns) > 0 else 0
-    sortino = (simple_returns.mean() * 252 - rf) / downside_dev if downside_dev > 0 else 0
-    
-    calmar = cagr / abs(max_dd) if max_dd != 0 else 0
-    
-    threshold = 0.0
-    gains = simple_returns[simple_returns > threshold].sum()
-    losses = abs(simple_returns[simple_returns < threshold].sum())
-    omega = gains / losses if losses > 0 else 0
-    
-    positive_rets = simple_returns[simple_returns > 0]
-    negative_rets = simple_returns[simple_returns < 0]
-    win_rate = len(positive_rets) / len(simple_returns) if len(simple_returns) > 0 else 0
-    gross_profit = positive_rets.sum()
-    gross_loss = abs(negative_rets.sum())
-    profit_factor = gross_profit / gross_loss if gross_loss > 0 else 0
-    
-    var_95 = np.percentile(simple_returns, 5) * np.sqrt(252) if len(simple_returns) > 0 else 0
-    cvar_95 = simple_returns[simple_returns <= np.percentile(simple_returns, 5)].mean() * np.sqrt(252) if len(simple_returns) > 0 else 0
-    
-    skewness = simple_returns.skew() if len(simple_returns) > 0 else 0
-    kurtosis = simple_returns.kurt() if len(simple_returns) > 0 else 0
-    
-    ulcer_index = np.sqrt((dd ** 2).mean()) if len(dd) > 0 else 0
-    
-    recovery_factor = -cagr / max_dd if max_dd != 0 else 0
-    
-    top_5 = np.percentile(simple_returns, 95)
-    bottom_5 = np.percentile(simple_returns, 5)
-    tail_ratio = abs(top_5 / bottom_5) if bottom_5 != 0 else 0
-    
     return {
         "CAGR": cagr,
         "Volatility": vol,
         "Sharpe": sharpe,
-        "Sortino": sortino,
-        "Calmar": calmar,
-        "Omega": omega,
         "MaxDrawdown": max_dd,
         "TotalReturn": eq_curve.iloc[-1] / eq_curve.iloc[0] - 1 if eq_curve.iloc[0] != 0 else 0,
-        "WinRate": win_rate,
-        "ProfitFactor": profit_factor,
-        "VaR_95": var_95,
-        "CVaR_95": cvar_95,
-        "Skewness": skewness,
-        "Kurtosis": kurtosis,
-        "UlcerIndex": ulcer_index,
-        "RecoveryFactor": recovery_factor,
-        "TailRatio": tail_ratio,
-        "DD_Series": dd
     }
 
-def backtest(prices, signal, risk_on_weights, risk_off_weights, flip_cost, ma_flip_multiplier=3.0, annual_drag_pct=0.0):
-    if prices.empty:
-        return {
-            "returns": pd.Series([], dtype=float),
-            "equity_curve": pd.Series([], dtype=float),
-            "signal": pd.Series([], dtype=bool),
-            "weights": pd.DataFrame(),
-            "performance": compute_enhanced_performance(pd.Series([], dtype=float), pd.Series([], dtype=float)),
-            "flip_mask": pd.Series([], dtype=bool),
-        }
-    
+def backtest(prices, signal, risk_on_weights, risk_off_weights, flip_cost=0.0000):
     simple = prices.pct_change().fillna(0)
-    weights = build_weight_df(prices, signal, risk_on_weights, risk_off_weights)
+    
+    # Build weights dataframe
+    weights = pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
+    
+    for a, w in risk_on_weights.items():
+        if a in prices.columns:
+            weights.loc[signal, a] = w
 
+    for a, w in risk_off_weights.items():
+        if a in prices.columns:
+            weights.loc[~signal, a] = w
+    
     strategy_simple = (weights.shift(1).fillna(0) * simple).sum(axis=1)
-    sig_arr = signal.astype(int)
-    flip_mask = sig_arr.diff().abs() == 1
-
-    flip_costs = np.where(flip_mask, -flip_cost * ma_flip_multiplier, 0.0)
+    eq = (1 + strategy_simple).cumprod()
     
-    if annual_drag_pct > 0:
-        daily_drag_factor = (1 - annual_drag_pct) ** (1/252)
-        strategy_simple = (1 + strategy_simple) * daily_drag_factor - 1
-    
-    strat_adj = strategy_simple + flip_costs
-
-    eq = (1 + strat_adj).cumprod()
-
     return {
-        "returns": strat_adj,
+        "returns": strategy_simple,
         "equity_curve": eq,
         "signal": signal,
         "weights": weights,
-        "performance": compute_enhanced_performance(strat_adj, eq),
-        "flip_mask": flip_mask,
+        "performance": compute_enhanced_performance(strategy_simple, eq),
     }
-
-def compute_quarter_progress(risky_start, risky_today, quarterly_target):
-    target_risky = risky_start * (1 + quarterly_target)
-    gap = target_risky - risky_today
-    pct_gap = gap / risky_start if risky_start > 0 else 0
-
-    return {
-        "Risk On Capital at Last Rebalance ($)": risky_start,
-        "Risk On Capital Today ($)": risky_today,
-        "Risk On Capital Target Next Rebalance ($)": target_risky,
-        "Gap ($)": gap,
-        "Gap (%)": pct_gap,
-    }
-
-def normalize(eq):
-    if len(eq) == 0 or eq.iloc[0] == 0:
-        return eq
-    return eq / eq.iloc[0] * 10000
-
-def plot_diagnostics(hybrid_eq, bh_eq, hybrid_signal):
-    if hybrid_eq.empty or bh_eq.empty:
-        fig, ax = plt.subplots(figsize=(10, 6))
-        ax.text(0.5, 0.5, 'Insufficient data for diagnostics', 
-                ha='center', va='center', transform=ax.transAxes)
-        return fig
-    
-    hybrid_eq = hybrid_eq / hybrid_eq.iloc[0]
-    bh_eq     = bh_eq / bh_eq.iloc[0]
-
-    hybrid_ret = hybrid_eq.pct_change().fillna(0)
-    bh_ret = bh_eq.pct_change().fillna(0)
-
-    hybrid_dd = hybrid_eq / hybrid_eq.cummax() - 1
-    bh_dd = bh_eq / bh_eq.cummax() - 1
-
-    window = min(252, len(hybrid_ret))
-    roll_sharpe_h = hybrid_ret.rolling(window).mean() / hybrid_ret.rolling(window).std() * np.sqrt(252)
-    roll_sharpe_b = bh_ret.rolling(window).mean() / bh_ret.rolling(window).std() * np.sqrt(252)
-
-    hybrid_m = hybrid_ret.resample("M").apply(lambda x: (1 + x).prod() - 1)
-    bh_m = bh_ret.resample("M").apply(lambda x: (1 + x).prod() - 1)
-
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(14, 10))
-
-    ax1.plot(hybrid_eq, label="Sigma", linewidth=2, color="green")
-    ax1.plot(bh_eq, label="Buy & Hold", linewidth=2, alpha=0.7)
-
-    in_off = False
-    start = None
-    for date, on in hybrid_signal.items():
-        if not on and not in_off:
-            start = date
-            in_off = True
-        elif on and in_off:
-            ax1.axvspan(start, date, color="red", alpha=0.15)
-            in_off = False
-    if in_off:
-        ax1.axvspan(start, hybrid_signal.index[-1], color="red", alpha=0.15)
-
-    ax1.set_title("Cumulative Returns with Regime Shading")
-    ax1.set_ylabel("Growth of $1")
-    ax1.legend()
-    ax1.grid(alpha=0.3)
-
-    ax2.plot(hybrid_dd * 100, label="Sigma", linewidth=1.5, color="green")
-    ax2.plot(bh_dd * 100, label="Buy & Hold", linewidth=1.5, alpha=0.7)
-    ax2.set_title("Drawdown Comparison (%)")
-    ax2.set_ylabel("Drawdown %")
-    ax2.legend()
-    ax2.grid(alpha=0.3)
-
-    ax3.plot(roll_sharpe_h, label="Sigma", linewidth=1.5, color="green")
-    ax3.plot(roll_sharpe_b, label="Buy & Hold", linewidth=1.5, alpha=0.7)
-    ax3.axhline(0, color="black", linewidth=0.5)
-    ax3.set_title("Rolling 252-Day Sharpe Ratio")
-    ax3.legend()
-    ax3.grid(alpha=0.3)
-
-    bins = np.linspace(
-        min(hybrid_m.min(), bh_m.min()),
-        max(hybrid_m.max(), bh_m.max()),
-        20
-    )
-
-    ax4.hist(hybrid_m, bins=bins, alpha=0.7, density=True, label="Sigma")
-    ax4.hist(bh_m, bins=bins, alpha=0.5, density=True, label="Buy & Hold")
-    ax4.axvline(0, color="black", linestyle="--", linewidth=1)
-    ax4.set_title("Monthly Returns Distribution")
-    ax4.legend()
-    ax4.grid(alpha=0.3)
-
-    plt.tight_layout()
-    return fig
-
-def monte_carlo_strategy_analysis(strategy_returns, strategy_equity, n_sim=10000, periods=252, initial_capital=None):
-    if len(strategy_returns) < 100:
-        return None
-    
-    mu_daily = strategy_returns.mean()
-    sigma_daily = strategy_returns.std()
-    
-    if initial_capital is not None:
-        initial_price = initial_capital
-    else:
-        initial_price = strategy_equity.iloc[-1] if len(strategy_equity) > 0 else 10000
-    
-    np.random.seed(42)
-    sim_returns = np.random.normal(mu_daily, sigma_daily, (n_sim, periods))
-    
-    sim_values = initial_price * np.cumprod(1 + sim_returns, axis=1)
-    
-    terminal_values = sim_values[:, -1]
-    terminal_returns = (terminal_values / initial_price) - 1
-    
-    percentiles = np.percentile(terminal_returns, list(range(5, 100, 5)))
-    
-    def calculate_cvar(returns, confidence):
-        threshold = np.percentile(returns, 100 - confidence)
-        bad_returns = returns[returns <= threshold]
-        return -np.mean(bad_returns) if len(bad_returns) > 0 else 0
-    
-    cvar_90 = calculate_cvar(terminal_returns, 90)
-    cvar_95 = calculate_cvar(terminal_returns, 95)
-    cvar_99 = calculate_cvar(terminal_returns, 99)
-    
-    expected_return = np.mean(terminal_returns)
-    expected_vol = np.std(terminal_returns)
-    prob_positive = np.mean(terminal_returns > 0)
-    
-    terminal_value_percentiles = np.percentile(terminal_values, [5, 25, 50, 75, 95])
-    
-    return {
-        'sim_prices': sim_values,
-        'terminal_values': terminal_values,
-        'terminal_returns': terminal_returns,
-        'percentiles': percentiles,
-        'terminal_value_percentiles': terminal_value_percentiles,
-        'cvar_90': cvar_90,
-        'cvar_95': cvar_95,
-        'cvar_99': cvar_99,
-        'expected_return': expected_return,
-        'expected_vol': expected_vol,
-        'prob_positive': prob_positive,
-        'var_95': np.percentile(terminal_returns, 5),
-        'var_99': np.percentile(terminal_returns, 1),
-        'initial_price': initial_price
-    }
-
-def plot_monte_carlo_results(results_dict, strategy_names):
-    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
-    
-    colors = plt.cm.Set1(np.linspace(0, 1, len(results_dict)))
-    
-    ax = axes[0, 0]
-    for i, (name, results) in enumerate(results_dict.items()):
-        if results is not None:
-            returns_pct = results['terminal_returns'] * 100
-            ax.hist(returns_pct, bins=50, alpha=0.5, 
-                   label=name, density=True, color=colors[i])
-    ax.axvline(x=0, color='black', linestyle='--', linewidth=1)
-    ax.set_title('12-Month Return Distributions')
-    ax.set_xlabel('Return (%)')
-    ax.set_ylabel('Density')
-    ax.legend()
-    ax.grid(alpha=0.3)
-    
-    ax = axes[0, 1]
-    percentile_levels = list(range(5, 100, 5))
-    for i, (name, results) in enumerate(results_dict.items()):
-        if results is not None:
-            percentiles_pct = results['percentiles'] * 100
-            ax.plot(percentile_levels, percentiles_pct, 
-                   marker='o', label=name, color=colors[i])
-    ax.axhline(y=0, color='black', linestyle='--', linewidth=1)
-    ax.set_title('Percentile Return Ranges (5%-95%)')
-    ax.set_xlabel('Percentile')
-    ax.set_ylabel('12-Month Return (%)')
-    ax.legend()
-    ax.grid(alpha=0.3)
-    
-    ax = axes[0, 2]
-    cvar_data = []
-    labels = []
-    for name, results in results_dict.items():
-        if results is not None:
-            cvar_data.append([results['cvar_95'] * 100, results['cvar_99'] * 100])
-            labels.append(name)
-    
-    if cvar_data:
-        cvar_data = np.array(cvar_data)
-        x = np.arange(len(labels))
-        width = 0.35
-        ax.bar(x - width/2, cvar_data[:, 0], width, label='CVaR 95%', alpha=0.7)
-        ax.bar(x + width/2, cvar_data[:, 1], width, label='CVaR 99%', alpha=0.7)
-        ax.set_title('Conditional Value at Risk (CVaR)')
-        ax.set_ylabel('CVaR (%)')
-        ax.set_xticks(x)
-        ax.set_xticklabels(labels, rotation=45, ha='right')
-        ax.legend()
-        ax.grid(alpha=0.3)
-    
-    ax = axes[1, 0]
-    for i, (name, results) in enumerate(results_dict.items()):
-        if results is not None:
-            for j in range(min(20, results['sim_prices'].shape[0])):
-                ax.plot(results['sim_prices'][j, :], alpha=0.1, color=colors[i])
-    ax.set_title('Sample Portfolio Paths ($)')
-    ax.set_xlabel('Trading Days')
-    ax.set_ylabel('Portfolio Value ($)')
-    ax.grid(alpha=0.3)
-    
-    ax = axes[1, 1]
-    for i, (name, results) in enumerate(results_dict.items()):
-        if results is not None:
-            ax.scatter(results['expected_vol'], results['expected_return'] * 100, 
-                      s=100, label=name, color=colors[i], alpha=0.7)
-            ax.text(results['expected_vol']*1.01, results['expected_return']*100*1.01, 
-                   name, fontsize=9, alpha=0.8)
-    ax.axhline(y=0, color='black', linestyle='--', linewidth=0.5)
-    ax.axvline(x=0, color='black', linestyle='--', linewidth=0.5)
-    ax.set_title('Expected Risk-Return Profile (Annualized)')
-    ax.set_xlabel('Expected Volatility (Annualized)')
-    ax.set_ylabel('Expected Return (% Annualized)')
-    ax.grid(alpha=0.3)
-    
-    ax = axes[1, 2]
-    prob_data = []
-    prob_labels = []
-    for name, results in results_dict.items():
-        if results is not None:
-            prob_data.append(results['prob_positive'] * 100)
-            prob_labels.append(name)
-    
-    if prob_data:
-        bars = ax.bar(range(len(prob_data)), prob_data, color=colors[:len(prob_data)])
-        ax.set_title('Probability of Positive 12-Month Return')
-        ax.set_ylabel('Probability (%)')
-        ax.set_xticks(range(len(prob_data)))
-        ax.set_xticklabels(prob_labels, rotation=45, ha='right')
-        ax.axhline(y=50, color='red', linestyle='--', linewidth=1, alpha=0.5)
-        
-        for bar, val in zip(bars, prob_data):
-            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
-                   f'{val:.1f}%', ha='center', va='bottom', fontsize=9)
-        ax.grid(alpha=0.3)
-    
-    plt.tight_layout()
-    return fig
 
 # ============================================================
-# STREAMLIT APP - MAIN FUNCTION
+# MAIN APP - INTEGRATED AUTHENTICATION
 # ============================================================
 
 def main():
     st.set_page_config(
         page_title="Sigma Strategy System",
         layout="wide",
-        page_icon="📈",
-        initial_sidebar_state="expanded"
+        page_icon="📈"
     )
     
     # Initialize session state
-    initialize_session_state()
+    if 'authentication_status' not in st.session_state:
+        st.session_state.authentication_status = None
+    if 'username' not in st.session_state:
+        st.session_state.username = None
+    if 'name' not in st.session_state:
+        st.session_state.name = None
+    if 'prefs' not in st.session_state:
+        st.session_state.prefs = None
     
-    # Handle message from JavaScript for token
-    if not st.session_state.page_loaded:
-        sync_auth_token_from_browser()
-        st.session_state.page_loaded = True
+    # Sync SQLite users to authenticator config
+    config = sync_db_to_authenticator()
     
-    # Check for password reset
-    params = st.query_params
-    if "reset" in params:
-        handle_password_reset(params["reset"])
-        return
+    # Initialize authenticator with synced config
+    authenticator = stauth.Authenticate(
+        config['credentials'],
+        config['cookie']['name'],
+        config['cookie']['key'],
+        config['cookie']['expiry_days'],
+    )
     
-    # Try to restore session from token
-    if not st.session_state.authenticated:
-        if restore_session_from_token():
-            st.rerun()
-        else:
-            show_auth_interface()
-            return
+    # ============================================================
+    # AUTHENTICATION INTERFACE
+    # ============================================================
     
-    # User is authenticated - show main app
-    show_main_interface()
-
-def handle_password_reset(token):
-    """Handle password reset flow"""
-    st.title("Reset Password")
-    reset_user = validate_token(token)
-    if not reset_user:
-        st.error("❌ Reset link is invalid or expired.")
-        st.stop()
-    
-    with st.form("reset_password_form"):
-        st.write(f"Setting new password for user: **{reset_user}**")
-        pw1 = st.text_input("New Password", type="password", key="pw1")
-        pw2 = st.text_input("Confirm Password", type="password", key="pw2")
-        submit = st.form_submit_button("Reset Password")
+    # Show tabs for login/signup
+    if st.session_state.authentication_status is not True:
+        login_tab, signup_tab = st.tabs(["Login", "Sign Up"])
         
-        if submit:
-            if not pw1 or pw1 != pw2:
-                st.error("Passwords do not match.")
-            elif len(pw1) < 8:
-                st.error("Password must be at least 8 characters.")
-            else:
-                with get_db() as conn:
-                    conn.execute(
-                        "UPDATE users SET password_hash = ? WHERE username = ?",
-                        (hash_password(pw1), reset_user)
-                    )
-                consume_token(reset_user)
-                st.success("✅ Password reset successfully! You may now log in.")
-                if st.button("Go to Login"):
-                    st.query_params.clear()
-                    st.rerun()
-    st.stop()
-
-def show_auth_interface():
-    """Show authentication interface (login/signup/reset)"""
-    st.title("Sigma Strategy System")
-    
-    tab1, tab2, tab3 = st.tabs(["Login", "Sign Up", "Reset Password"])
-    
-    with tab1:
-        st.subheader("Login")
-        with st.form("login_form"):
-            username = st.text_input("Username")
-            password = st.text_input("Password", type="password")
-            remember = st.checkbox("Remember me for 30 days", value=True)
-            submit = st.form_submit_button("Login")
+        with login_tab:
+            name, authentication_status, username = authenticator.login("Login", "main")
             
-            if submit:
-                if not username or not password:
-                    st.error("Please enter username and password")
-                else:
-                    user_data = get_user(username)
-                    if user_data:
-                        if user_data[5] == 0:  # is_active check
-                            st.error("Account is disabled. Please contact support.")
-                        elif verify_password(password, user_data[3]):
-                            update_last_login(username)
-                            
-                            # Create auth token if "remember me" is checked
-                            if remember:
-                                token = create_auth_token(username)
-                                st.session_state.auth_token = token
-                                sync_auth_token_to_browser(token)
-                            
-                            st.session_state.update({
-                                "authenticated": True,
-                                "username": username,
-                                "name": user_data[1],
-                                "prefs": load_user_prefs(username),
-                                "prefs_loaded": True,
-                                "last_activity": datetime.now()
-                            })
-                            
-                            st.success(f"Welcome back, {user_data[1]}!")
-                            st.rerun()
+            if authentication_status is False:
+                st.error("Username/password is incorrect")
+            elif authentication_status is None:
+                st.warning("Please enter your username and password")
+            
+            if authentication_status:
+                # Update last login in SQLite
+                update_last_login_in_db(username)
+                
+                # Store in session state
+                st.session_state.authentication_status = True
+                st.session_state.username = username
+                st.session_state.name = name
+                st.session_state.prefs = load_user_prefs(username)
+                st.rerun()
+        
+        with signup_tab:
+            st.subheader("Create New Account")
+            
+            with st.form("signup_form"):
+                new_username = st.text_input("Username")
+                new_name = st.text_input("Full Name")
+                new_email = st.text_input("Email")
+                new_password = st.text_input("Password", type="password")
+                new_password_confirm = st.text_input("Confirm Password", type="password")
+                
+                submit = st.form_submit_button("Create Account")
+                
+                if submit:
+                    # Validation
+                    errors = []
+                    if not all([new_username, new_name, new_email, new_password]):
+                        errors.append("All fields are required")
+                    if len(new_password) < 8:
+                        errors.append("Password must be at least 8 characters")
+                    if new_password != new_password_confirm:
+                        errors.append("Passwords do not match")
+                    if username_exists_in_db(new_username):
+                        errors.append("Username already exists")
+                    if email_exists_in_db(new_email):
+                        errors.append("Email already registered")
+                    
+                    if errors:
+                        for error in errors:
+                            st.error(error)
+                    else:
+                        # Create user in SQLite
+                        if create_user_in_db(new_username, new_name, new_email, new_password):
+                            # Sync to authenticator config
+                            sync_db_to_authenticator()
+                            st.success("✅ Account created successfully! Please log in.")
                         else:
-                            st.error("Invalid username or password")
-                    else:
-                        st.error("Invalid username or password")
+                            st.error("Failed to create account")
+        
+        st.stop()  # Stop here if not authenticated
     
-    with tab2:
-        st.subheader("Create New Account")
-        with st.form("signup_form"):
-            new_username = st.text_input("Username", help="Choose a unique username")
-            new_name = st.text_input("Full Name")
-            new_email = st.text_input("Email")
-            new_pw = st.text_input("Password", type="password", 
-                                  help="At least 8 characters")
-            new_pw2 = st.text_input("Confirm Password", type="password")
-            submit = st.form_submit_button("Create Account")
-            
-            if submit:
-                # Validation
-                errors = []
-                if not all([new_username, new_name, new_email, new_pw]):
-                    errors.append("All fields are required")
-                if len(new_pw) < 8:
-                    errors.append("Password must be at least 8 characters")
-                if new_pw != new_pw2:
-                    errors.append("Passwords do not match")
-                if username_exists(new_username):
-                    errors.append("Username already exists")
-                if email_exists(new_email):
-                    errors.append("Email already registered")
-                if "@" not in new_email or "." not in new_email:
-                    errors.append("Invalid email format")
-                
-                if errors:
-                    for error in errors:
-                        st.error(error)
-                else:
-                    try:
-                        create_user(new_username, new_name, new_email, new_pw)
-                        st.success("✅ Account created successfully! You can now log in.")
-                    except Exception as e:
-                        st.error(f"Error creating account: {str(e)}")
+    # ============================================================
+    # AUTHENTICATED USER INTERFACE
+    # ============================================================
     
-    with tab3:
-        st.subheader("Forgot Password")
-        with st.form("forgot_password_form"):
-            reset_email = st.text_input("Enter your email address")
-            submit = st.form_submit_button("Send Reset Link")
-            
-            if submit:
-                with get_db() as conn:
-                    row = conn.execute(
-                        "SELECT username FROM users WHERE email = ?",
-                        (reset_email,)
-                    ).fetchone()
-                
-                if row:
-                    token = create_token(row[0])
-                    # Get app URL from environment or use localhost
-                    app_url = os.getenv("APP_URL", st.secrets.get("APP_URL", "http://localhost:8501"))
-                    reset_link = f"{app_url}?reset={token}"
-                    
-                    email_sent = send_email_simple(
-                        reset_email,
-                        "Reset Your Password - Sigma Strategy System",
-                        f"""
-                        <h3>Password Reset Request</h3>
-                        <p>You requested to reset your password. Click the link below:</p>
-                        <p><a href="{reset_link}">Reset Password</a></p>
-                        <p>This link will expire in 30 minutes.</p>
-                        <p>If you didn't request this, you can safely ignore this email.</p>
-                        """
-                    )
-                    
-                    if email_sent:
-                        st.success("Password reset link sent to your email.")
-                    else:
-                        st.error("Failed to send reset email. Please try again later.")
-                else:
-                    st.error("No verified account found with that email.")
-
-def show_main_interface():
-    """Show the main application interface for authenticated users"""
-    # Logout button in sidebar
-    with st.sidebar:
-        st.title(f"Welcome {st.session_state.name}!")
-        if st.button("🚪 Logout", type="primary", use_container_width=True):
-            # Revoke all tokens for this user
-            revoke_all_user_tokens(st.session_state.username)
-            
-            # Clear local storage
-            components.html(
-                """
-                <script>
-                localStorage.removeItem("sigma_auth_token");
-                </script>
-                """,
-                height=0
-            )
-            
-            # Clear session state
-            for key in list(st.session_state.keys()):
-                del st.session_state[key]
-            
-            st.query_params.clear()
-            st.rerun()
+    # User is authenticated at this point
+    st.sidebar.title(f"Welcome {st.session_state.name}!")
+    
+    # Logout button
+    authenticator.logout("Logout", "sidebar")
     
     # Main app content
     show_strategy_overview()
     st.markdown("---")
     
-    # Load user preferences if not loaded
-    if not st.session_state.get("prefs_loaded", False):
+    # Load user preferences
+    if st.session_state.prefs is None:
         st.session_state.prefs = load_user_prefs(st.session_state.username)
-        st.session_state.prefs_loaded = True
     
     prefs = st.session_state.prefs
     
-    # Strategy settings in sidebar
+    # ============================================================
+    # STRATEGY SETTINGS
+    # ============================================================
+    
     st.sidebar.header("⚙️ Strategy Settings")
     
     with st.sidebar.expander("Portfolio Configuration", expanded=True):
@@ -1425,7 +529,6 @@ def show_main_interface():
         }
         save_user_prefs(st.session_state.username, st.session_state.prefs)
         st.sidebar.success("Settings saved!")
-        st.rerun()
     
     # Run analysis button
     run_clicked = st.sidebar.button("🚀 Run Analysis", type="primary", use_container_width=True)
@@ -1435,16 +538,14 @@ def show_main_interface():
         return
     
     # ============================================================
-    # TRADING STRATEGY EXECUTION
+    # STRATEGY EXECUTION
     # ============================================================
     
-    # Process inputs
     try:
-        # Parse tickers and weights
+        # Process inputs
         risk_on_tickers = [t.strip().upper() for t in risk_on_tickers_str.split(",") if t.strip()]
         risk_on_weights_list = [float(x.strip()) for x in risk_on_weights_str.split(",") if x.strip()]
         
-        # Ensure we have matching counts
         if len(risk_on_tickers) != len(risk_on_weights_list):
             st.error(f"Mismatch: {len(risk_on_tickers)} tickers but {len(risk_on_weights_list)} weights")
             return
@@ -1465,146 +566,74 @@ def show_main_interface():
         # Combine all tickers
         all_tickers = list(set(risk_on_tickers + risk_off_tickers))
         
-        # Load price data with progress
-        with st.spinner(f"Loading price data for {len(all_tickers)} tickers..."):
-            prices = load_price_data_cached(all_tickers, start)
+        # Load price data with simple yfinance call
+        with st.spinner(f"Loading price data for {', '.join(all_tickers)}..."):
+            prices = load_price_data(all_tickers, start)
         
         if prices.empty:
             st.error("No data loaded. Please check your ticker symbols and date range.")
-            
-            # Try alternative tickers
-            st.info("Trying alternative ETFs...")
-            alternative_on = ["SPY"]  # S&P 500 ETF
-            alternative_off = ["BND"]  # Total bond market ETF
-            
-            with st.spinner("Loading alternative data..."):
-                alt_prices = load_price_data_cached(alternative_on + alternative_off, start)
-            
-            if not alt_prices.empty:
-                st.info(f"Using alternative tickers: Risk On={alternative_on}, Risk Off={alternative_off}")
-                risk_on_tickers = alternative_on
-                risk_on_weights = {alternative_on[0]: 1.0}
-                risk_off_tickers = alternative_off
-                risk_off_weights = {alternative_off[0]: 1.0}
-                prices = alt_prices
-            else:
-                return
+            return
         
-        # Show loading progress for analysis
-        with st.spinner("Running analysis..."):
-            
-            # MA setup
-            best_len = 200
-            best_type = "sma"
-            
-            portfolio_index = build_portfolio_index(prices, risk_on_weights, annual_drag_pct=annual_drag_decimal)
-            opt_ma = compute_ma(portfolio_index, best_len, best_type)
-            
-            tolerance_decimal = 0.0
-            tol_series = pd.Series(tolerance_decimal, index=portfolio_index.index)
-            
-            sig = generate_testfol_signal_vectorized(
-                portfolio_index,
-                opt_ma,
-                tol_series,
-                min_holding_days=min_days
-            )
-            
-            # Run backtests
-            best_result = backtest(prices, sig, risk_on_weights, risk_off_weights, FLIP_COST, 
-                                  ma_flip_multiplier=3.0, annual_drag_pct=annual_drag_decimal)
-            
-            latest_signal = sig.iloc[-1] if not sig.empty else False
-            current_regime = "Risk On" if latest_signal else "Risk Off"
-            
-            # Get returns data
-            simple_rets = prices.pct_change().fillna(0)
-            risk_on_simple = pd.Series(0.0, index=simple_rets.index)
-            for a, w in risk_on_weights.items():
-                if a in simple_rets.columns:
-                    risk_on_simple += simple_rets[a] * w
-            
-            if annual_drag_decimal > 0:
-                daily_drag_factor = (1 - annual_drag_decimal) ** (1/252)
-                risk_on_simple = (1 + risk_on_simple) * daily_drag_factor - 1
-            
-            risk_on_eq = (1 + risk_on_simple).cumprod()
-            
-            # Calendar quarter logic
-            dates = prices.index
-            true_q_ends = pd.date_range(start=dates.min(), end=dates.max(), freq='Q')
-            mapped_q_ends = []
-            for qd in true_q_ends:
-                valid_dates = dates[dates <= qd]
-                if len(valid_dates) > 0:
-                    mapped_q_ends.append(valid_dates.max())
-            
-            mapped_q_ends = pd.to_datetime(mapped_q_ends)
-            
-            today_date = pd.Timestamp.today().normalize()
-            true_next_q = pd.date_range(start=today_date, periods=2, freq="Q")[0]
-            next_q_end = true_next_q
-            days_to_next_q = (next_q_end - today_date).days
-            
-            if len(risk_on_eq) > 0 and risk_on_eq.iloc[0] != 0:
-                bh_cagr = (risk_on_eq.iloc[-1] / risk_on_eq.iloc[0]) ** (252 / len(risk_on_eq)) - 1
-                quarterly_target = (1 + bh_cagr) ** (1/4) - 1
-            else:
-                bh_cagr = 0
-                quarterly_target = 0
-            
-            risk_off_daily = pd.Series(0.0, index=simple_rets.index)
-            for a, w in risk_off_weights.items():
-                if a in simple_rets.columns:
-                    risk_off_daily += simple_rets[a] * w
-            
-            pure_sig_signal = pd.Series(True, index=risk_on_simple.index)
-            
-            pure_sig_eq, pure_sig_rw, pure_sig_sw, pure_sig_rebals = run_sig_engine(
-                risk_on_simple,
-                risk_off_daily,
-                quarterly_target,
-                pure_sig_signal,
-                quarter_end_dates=mapped_q_ends,
-                quarterly_multiplier=2.0,
-                ma_flip_multiplier=0.0
-            )
-            
-            hybrid_eq, hybrid_rw, hybrid_sw, hybrid_rebals = run_sig_engine(
-                risk_on_simple,
-                risk_off_daily,
-                quarterly_target,
-                sig,
-                pure_sig_rw=pure_sig_rw,
-                pure_sig_sw=pure_sig_sw,
-                quarter_end_dates=mapped_q_ends,
-                quarterly_multiplier=2.0,
-                ma_flip_multiplier=3.0
-            )
-            
-            hybrid_simple = hybrid_eq.pct_change().fillna(0)
-            
-            # Since-inception analysis
-            inception = pd.to_datetime(inception_date)
-            sigma_eq_si = hybrid_eq.loc[hybrid_eq.index >= inception]
-            sigma_ret_si = sigma_eq_si.pct_change().fillna(0)
-            
-            bh_eq_si = risk_on_eq.loc[risk_on_eq.index >= inception]
-            bh_ret_si = bh_eq_si.pct_change().fillna(0)
-            
-            benchmark_px = load_price_data_cached([benchmark], inception)
-            if not benchmark_px.empty and benchmark in benchmark_px.columns:
-                benchmark_eq_si = (benchmark_px[benchmark] / benchmark_px[benchmark].iloc[0]).reindex(sigma_eq_si.index).ffill()
-                benchmark_ret_si = benchmark_eq_si.pct_change().fillna(0)
-            else:
-                benchmark_eq_si = pd.Series(1.0, index=sigma_eq_si.index)
-                benchmark_ret_si = pd.Series(0.0, index=sigma_eq_si.index)
+        st.success(f"✅ Data loaded from {prices.index[0].date()} to {prices.index[-1].date()}")
+        
+        # MA setup
+        best_len = 200
+        best_type = "sma"
+        
+        portfolio_index = build_portfolio_index(prices, risk_on_weights, annual_drag_pct=annual_drag_decimal)
+        opt_ma = compute_ma(portfolio_index, best_len, best_type)
+        
+        tolerance_decimal = 0.0
+        tol_series = pd.Series(tolerance_decimal, index=portfolio_index.index)
+        
+        sig = generate_testfol_signal_vectorized(
+            portfolio_index,
+            opt_ma,
+            tol_series,
+            min_holding_days=min_days
+        )
+        
+        # Run backtest
+        best_result = backtest(prices, sig, risk_on_weights, risk_off_weights)
+        
+        latest_signal = sig.iloc[-1] if not sig.empty else False
+        current_regime = "Risk On" if latest_signal else "Risk Off"
+        
+        # Get returns data
+        simple_rets = prices.pct_change().fillna(0)
+        risk_on_simple = pd.Series(0.0, index=simple_rets.index)
+        for a, w in risk_on_weights.items():
+            if a in simple_rets.columns:
+                risk_on_simple += simple_rets[a] * w
+        
+        if annual_drag_decimal > 0:
+            daily_drag_factor = (1 - annual_drag_decimal) ** (1/252)
+            risk_on_simple = (1 + risk_on_simple) * daily_drag_factor - 1
+        
+        risk_on_eq = (1 + risk_on_simple).cumprod()
+        
+        # Since-inception analysis
+        inception = pd.to_datetime(inception_date)
+        ma_eq_si = best_result["equity_curve"].loc[best_result["equity_curve"].index >= inception]
+        ma_ret_si = ma_eq_si.pct_change().fillna(0)
+        
+        bh_eq_si = risk_on_eq.loc[risk_on_eq.index >= inception]
+        bh_ret_si = bh_eq_si.pct_change().fillna(0)
+        
+        # Load benchmark
+        benchmark_px = load_price_data([benchmark], inception)
+        if not benchmark_px.empty and benchmark in benchmark_px.columns:
+            benchmark_eq_si = (benchmark_px[benchmark] / benchmark_px[benchmark].iloc[0]).reindex(ma_eq_si.index).ffill()
+            benchmark_ret_si = benchmark_eq_si.pct_change().fillna(0)
+        else:
+            benchmark_eq_si = pd.Series(1.0, index=ma_eq_si.index)
+            benchmark_ret_si = pd.Series(0.0, index=ma_eq_si.index)
         
         # ============================================================
         # DISPLAY RESULTS
         # ============================================================
         
-        st.success(f"✅ Analysis complete! Data loaded from {prices.index[0].date()} to {prices.index[-1].date()}")
+        st.subheader("📊 Performance Results")
         
         # Current regime
         col1, col2, col3 = st.columns(3)
@@ -1613,12 +642,18 @@ def show_main_interface():
         with col2:
             st.metric("Portfolio Value Today", f"${real_cap_1:,.2f}")
         with col3:
-            st.metric("Quarterly Target", f"{quarterly_target:.2%}")
+            # Calculate quarterly target
+            if len(risk_on_eq) > 0 and risk_on_eq.iloc[0] != 0:
+                bh_cagr = (risk_on_eq.iloc[-1] / risk_on_eq.iloc[0]) ** (252 / len(risk_on_eq)) - 1
+                quarterly_target = (1 + bh_cagr) ** (1/4) - 1
+                st.metric("Quarterly Target", f"{quarterly_target:.2%}")
+            else:
+                st.metric("Quarterly Target", "0.00%")
         
-        # Performance comparison
-        st.subheader(f"Performance (Sigma vs Buy & Hold vs {benchmark})")
+        # Performance comparison chart
+        st.subheader(f"Performance (200-Day MA vs Buy & Hold vs {benchmark})")
         fig, ax = plt.subplots(figsize=(12, 6))
-        ax.plot(sigma_eq_si / sigma_eq_si.iloc[0], label="Sigma", linewidth=2, color="blue")
+        ax.plot(ma_eq_si / ma_eq_si.iloc[0], label="200-Day MA", linewidth=2, color="blue")
         ax.plot(bh_eq_si / bh_eq_si.iloc[0], label="Buy & Hold", linewidth=2, alpha=0.7)
         ax.plot(benchmark_eq_si, label=benchmark, linewidth=2, linestyle="--", color="black", alpha=0.7)
         ax.set_ylabel("Growth of $1")
@@ -1628,7 +663,7 @@ def show_main_interface():
         st.pyplot(fig)
         
         # Performance metrics
-        sigma_perf_si = compute_enhanced_performance(sigma_ret_si, sigma_eq_si)
+        ma_perf_si = compute_enhanced_performance(ma_ret_si, ma_eq_si)
         bh_perf_si = compute_enhanced_performance(bh_ret_si, bh_eq_si)
         benchmark_perf_si = compute_enhanced_performance(benchmark_ret_si, benchmark_eq_si)
         
@@ -1644,7 +679,6 @@ def show_main_interface():
             ("CAGR", "CAGR", "pct"),
             ("Volatility", "Volatility", "pct"),
             ("Sharpe", "Sharpe", "dec"),
-            ("Sortino", "Sortino", "dec"),
             ("Max Drawdown", "MaxDrawdown", "pct"),
             ("Total Return", "TotalReturn", "pct"),
         ]
@@ -1652,92 +686,13 @@ def show_main_interface():
         for label, key, kind in metrics:
             metrics_data.append([
                 label,
-                fmt(sigma_perf_si[key], kind),
+                fmt(ma_perf_si[key], kind),
                 fmt(bh_perf_si[key], kind),
                 fmt(benchmark_perf_si[key], kind),
             ])
         
-        metrics_df = pd.DataFrame(metrics_data, columns=["Metric", "Sigma", "Buy & Hold", benchmark])
+        metrics_df = pd.DataFrame(metrics_data, columns=["Metric", "200-Day MA", "Buy & Hold", benchmark])
         st.dataframe(metrics_df, use_container_width=True)
-        
-        # Rebalance recommendations
-        st.subheader("📊 Rebalance Recommendations")
-        
-        if len(hybrid_rebals) > 0:
-            quarter_start_date = hybrid_rebals[-1]
-            if quarter_start_date in hybrid_rw.index:
-                risky_start = qs_cap_1 * float(hybrid_rw.loc[quarter_start_date])
-                risky_today = real_cap_1 * float(hybrid_rw.iloc[-1])
-                progress = compute_quarter_progress(risky_start, risky_today, quarterly_target)
-                
-                gap = progress['Gap ($)']
-                date_str = next_q_end.strftime("%m/%d/%Y")
-                days_str = f"{days_to_next_q} days"
-                dollar_amount = f"${abs(gap):,.2f}"
-                
-                if gap > 0:
-                    st.warning(f"**Action Needed:** Sell {dollar_amount} of Risk Off and Buy {dollar_amount} of Risk On")
-                    st.info(f"**Next Rebalance:** {date_str} ({days_str})")
-                elif gap < 0:
-                    st.warning(f"**Action Needed:** Sell {dollar_amount} of Risk On and Buy {dollar_amount} of Risk Off")
-                    st.info(f"**Next Rebalance:** {date_str} ({days_str})")
-                else:
-                    st.success(f"**No rebalance needed until {date_str} ({days_str})**")
-                
-                # Show progress table
-                progress_df = pd.DataFrame.from_dict(progress, orient='index', columns=['Value'])
-                progress_df.loc["Gap (%)"] = f"{progress['Gap (%)']:.2%}"
-                st.dataframe(progress_df)
-            else:
-                st.info("No recent rebalance data available.")
-        else:
-            st.info("No rebalance events in the analyzed period.")
-        
-        # Allocation tables
-        st.subheader("💼 Portfolio Allocations")
-        
-        hyb_r = float(hybrid_rw.iloc[-1]) if len(hybrid_rw) > 0 else 0
-        hyb_s = float(hybrid_sw.iloc[-1]) if len(hybrid_sw) > 0 else 0
-        pure_r = float(pure_sig_rw.iloc[-1]) if len(pure_sig_rw) > 0 else 0
-        pure_s = float(pure_sig_sw.iloc[-1]) if len(pure_sig_sw) > 0 else 0
-        
-        def compute_allocations(account_value, risky_w, safe_w, ron_w, roff_w):
-            risky_dollars = account_value * risky_w
-            safe_dollars = account_value * safe_w
-            alloc = {"Total Risky $": risky_dollars, "Total Safe $": safe_dollars}
-            for t, w in ron_w.items():
-                alloc[t] = risky_dollars * w
-            for t, w in roff_w.items():
-                alloc[t] = safe_dollars * w
-            return alloc
-        
-        tab1, tab2, tab3 = st.tabs(["Sigma", "SIG", "200 Day SMA"])
-        with tab1:
-            alloc = compute_allocations(real_cap_1, hyb_r, hyb_s, risk_on_weights, risk_off_weights)
-            alloc_df = pd.DataFrame.from_dict(alloc, orient="index", columns=["$"])
-            total = alloc_df["$"].sum()
-            if total > 0:
-                alloc_df["% Portfolio"] = (alloc_df["$"] / total * 100).apply(lambda x: f"{x:.2f}%")
-            st.dataframe(alloc_df)
-        
-        with tab2:
-            alloc = compute_allocations(real_cap_1, pure_r, pure_s, risk_on_weights, risk_off_weights)
-            alloc_df = pd.DataFrame.from_dict(alloc, orient="index", columns=["$"])
-            total = alloc_df["$"].sum()
-            if total > 0:
-                alloc_df["% Portfolio"] = (alloc_df["$"] / total * 100).apply(lambda x: f"{x:.2f}%")
-            st.dataframe(alloc_df)
-        
-        with tab3:
-            if latest_signal:
-                alloc = compute_allocations(real_cap_1, 1.0, 0.0, risk_on_weights, {})
-            else:
-                alloc = compute_allocations(real_cap_1, 0.0, 1.0, {}, risk_off_weights)
-            alloc_df = pd.DataFrame.from_dict(alloc, orient="index", columns=["$"])
-            total = alloc_df["$"].sum()
-            if total > 0:
-                alloc_df["% Portfolio"] = (alloc_df["$"] / total * 100).apply(lambda x: f"{x:.2f}%")
-            st.dataframe(alloc_df)
         
         # MA distance
         st.subheader("📐 200-Day SMA Crossover Distance")
@@ -1756,64 +711,12 @@ def show_main_interface():
                     delta = (upper - P) / P if P > 0 else 0
                     st.info(f"**Gain Required for Crossover:** {delta:.2%}")
         
-        # Monte Carlo Analysis (if enough data)
-        if len(hybrid_simple) > 100:
-            st.subheader("🎲 Monte Carlo Stress Testing")
-            
-            total_current_portfolio = real_cap_1
-            strategies_mc = {
-                "MA Strategy": {"returns": best_result["returns"], "equity": best_result["equity_curve"], "initial_capital": total_current_portfolio},
-                "Buy & Hold": {"returns": risk_on_simple, "equity": risk_on_eq, "initial_capital": total_current_portfolio},
-                "Sigma": {"returns": hybrid_simple, "equity": hybrid_eq, "initial_capital": total_current_portfolio},
-            }
-            
-            with st.spinner("Running Monte Carlo simulations..."):
-                mc_results = {}
-                for name, data in strategies_mc.items():
-                    if len(data["returns"]) > 100:
-                        mc_results[name] = monte_carlo_strategy_analysis(
-                            data["returns"], data["equity"], n_sim=5000, periods=252, initial_capital=data["initial_capital"]
-                        )
-                
-                if any(v is not None for v in mc_results.values()):
-                    mc_fig = plot_monte_carlo_results(mc_results, list(strategies_mc.keys()))
-                    st.pyplot(mc_fig)
-                    
-                    # Show key insights
-                    st.subheader("📈 Key Insights")
-                    cols = st.columns(3)
-                    valid_results = [(name, r) for name, r in mc_results.items() if r is not None]
-                    
-                    if valid_results:
-                        with cols[0]:
-                            safest = min(valid_results, key=lambda x: x[1]['cvar_95'])
-                            st.metric("Most Conservative", safest[0])
-                        with cols[1]:
-                            highest_return = max(valid_results, key=lambda x: x[1]['expected_return'])
-                            st.metric("Highest Expected Return", highest_return[0])
-                        with cols[2]:
-                            highest_prob = max(valid_results, key=lambda x: x[1]['prob_positive'])
-                            st.metric("Highest Win Probability", f"{highest_prob[1]['prob_positive']:.1%}")
-        
-        # Strategy diagnostics
-        if not hybrid_eq.empty and not risk_on_eq.empty:
-            st.subheader("🔍 Strategy Diagnostics")
-            diag_fig = plot_diagnostics(hybrid_eq=hybrid_eq, bh_eq=risk_on_eq, hybrid_signal=sig)
-            st.pyplot(diag_fig)
-        
     except Exception as e:
         st.error(f"Error during analysis: {str(e)}")
         st.info("Please check your inputs and try again.")
-        
-        # Debug info
-        with st.expander("Debug Information"):
-            st.write(f"Error type: {type(e).__name__}")
-            st.write(f"Error details: {str(e)}")
-            import traceback
-            st.code(traceback.format_exc())
 
 # ============================================================
-# APP ENTRY POINT
+# RUN THE APP
 # ============================================================
 
 if __name__ == "__main__":

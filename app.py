@@ -25,7 +25,6 @@ os.makedirs(USER_DATA_DIR, exist_ok=True)
 PRICE_CACHE_DIR = "price_cache"
 os.makedirs(PRICE_CACHE_DIR, exist_ok=True)
 
-
 def get_db():
     """Get database connection with proper isolation"""
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -71,26 +70,143 @@ def init_auth_db():
         )
         """)
         
-        # Create indexes
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_password_resets_expires ON password_resets(expires_at)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_login_attempts_time ON login_attempts(attempt_time)")
         # Persistent auth tokens
         conn.execute("""
         CREATE TABLE IF NOT EXISTS auth_tokens (
             token_hash TEXT PRIMARY KEY,
             username TEXT NOT NULL,
             expires_at TIMESTAMP NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
         )
         """)
+        
+        # Create indexes
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_password_resets_expires ON password_resets(expires_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_login_attempts_time ON login_attempts(attempt_time)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_auth_tokens_expires ON auth_tokens(expires_at)")
+        
 init_auth_db()
+
+# ============================================================
+# FIXED: ENHANCED PRICE DATA LOADING FUNCTION
+# ============================================================
+
+def load_price_data(tickers, start_date, end_date=None):
+    """
+    Enhanced price loading with better error handling
+    """
+    # Handle single ticker case
+    if isinstance(tickers, str):
+        tickers = [tickers]
+    
+    # Remove any empty tickers
+    tickers = [t for t in tickers if t and str(t).strip()]
+    
+    if not tickers:
+        return pd.DataFrame()
+    
+    try:
+        # Try downloading with auto_adjust=True first
+        data = yf.download(
+            tickers, 
+            start=start_date, 
+            end=end_date, 
+            progress=False,
+            auto_adjust=True,
+            threads=True
+        )
+        
+        # Handle different data structures
+        if data.empty:
+            st.warning(f"No data found for tickers: {tickers}")
+            return pd.DataFrame()
+        
+        # Get price data
+        if isinstance(tickers, list) and len(tickers) > 1:
+            # Multiple tickers - get Close prices
+            if 'Close' in data.columns:
+                prices = data['Close'].copy()
+            else:
+                # If multi-index columns, find close prices
+                prices = data.xs('Close', axis=1, level=0, drop_level=True).copy()
+        else:
+            # Single ticker
+            if 'Close' in data.columns:
+                prices = data['Close'].copy()
+            else:
+                prices = data.copy()
+                if isinstance(prices, pd.Series):
+                    prices = prices.to_frame(name=tickers[0])
+        
+        # Forward fill and drop NaN
+        prices = prices.ffill().dropna()
+        
+        if prices.empty:
+            # Try alternative method for problematic tickers
+            st.warning(f"Alternative download attempt for: {tickers}")
+            prices_list = []
+            for ticker in tickers:
+                try:
+                    ticker_obj = yf.Ticker(ticker)
+                    hist = ticker_obj.history(start=start_date, end=end_date, auto_adjust=True)
+                    if not hist.empty:
+                        prices_list.append(hist['Close'].rename(ticker))
+                except Exception as e:
+                    st.warning(f"Could not download {ticker}: {str(e)}")
+            
+            if prices_list:
+                prices = pd.concat(prices_list, axis=1)
+                prices = prices.ffill().dropna()
+        
+        return prices
+        
+    except Exception as e:
+        st.error(f"Error downloading price data: {str(e)}")
+        return pd.DataFrame()
+
+# ============================================================
+# FIXED: ENHANCED CACHE FUNCTION WITH BETTER ERROR HANDLING
+# ============================================================
+
+def _price_cache_path(tickers, start, end):
+    if isinstance(tickers, str):
+        tickers = [tickers]
+    key = "_".join(sorted(tickers)) + f"_{start}_{end or 'latest'}"
+    safe_key = hashlib.md5(key.encode()).hexdigest()
+    return os.path.join(PRICE_CACHE_DIR, f"{safe_key}.parquet")
+
+@st.cache_data(show_spinner=False, ttl=3600*24)  # Cache for 24 hours
+def load_price_data_cached(tickers, start_date, end_date=None):
+    """Cache wrapper for price data"""
+    cache_path = _price_cache_path(tickers, start_date, end_date)
+    
+    # Check cache first
+    if os.path.exists(cache_path):
+        try:
+            cached_data = pd.read_parquet(cache_path)
+            if not cached_data.empty:
+                return cached_data
+        except Exception as e:
+            st.warning(f"Cache read error, re-downloading: {str(e)}")
+            os.remove(cache_path)  # Remove corrupted cache
+    
+    # Download fresh data
+    prices = load_price_data(tickers, start_date, end_date)
+    
+    if not prices.empty:
+        try:
+            prices.to_parquet(cache_path)
+        except Exception as e:
+            st.warning(f"Could not save cache: {str(e)}")
+    
+    return prices
 
 # ============================================================
 # SECURITY & AUTHENTICATION FUNCTIONS
 # ============================================================
-AUTH_TOKEN_DAYS = 30  # persistent login duration
-
+AUTH_TOKEN_DAYS = 30
 
 def create_auth_token(username: str) -> str:
     raw = secrets.token_urlsafe(48)
@@ -98,9 +214,10 @@ def create_auth_token(username: str) -> str:
     expires = datetime.utcnow() + timedelta(days=AUTH_TOKEN_DAYS)
 
     with get_db() as conn:
+        # Clean old tokens for this user
         conn.execute(
-            "DELETE FROM auth_tokens WHERE username = ?",
-            (username,)
+            "DELETE FROM auth_tokens WHERE username = ? OR expires_at < ?",
+            (username, datetime.utcnow())
         )
         conn.execute(
             """INSERT INTO auth_tokens (token_hash, username, expires_at)
@@ -109,8 +226,9 @@ def create_auth_token(username: str) -> str:
         )
     return raw
 
-
 def validate_auth_token(raw_token: str):
+    if not raw_token:
+        return None
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
     now = datetime.utcnow()
 
@@ -123,14 +241,24 @@ def validate_auth_token(raw_token: str):
 
     return row[0] if row else None
 
-
 def revoke_auth_token(raw_token: str):
+    if not raw_token:
+        return
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
     with get_db() as conn:
         conn.execute(
             "DELETE FROM auth_tokens WHERE token_hash = ?",
             (token_hash,)
         )
+
+def revoke_all_user_tokens(username: str):
+    """Revoke all tokens for a user"""
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM auth_tokens WHERE username = ?",
+            (username,)
+        )
+
 def hash_password(password: str) -> str:
     """Hash password with bcrypt"""
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
@@ -202,6 +330,8 @@ def create_token(username: str, minutes: int = 30) -> str:
 
 def validate_token(raw_token: str):
     """Validate token and return username if valid"""
+    if not raw_token:
+        return None
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
     now = datetime.utcnow()
 
@@ -240,14 +370,14 @@ def send_email_simple(to_email: str, subject: str, html_body: str):
         msg["From"] = from_email
         msg["To"] = to_email
 
-        # Plain-text fallback (VERY important for Gmail)
+        # Plain-text fallback
         text_part = MIMEText(
             "This email was sent to verify your Sigma System account. "
             "If you did not create an account, you can ignore this email.",
             "plain",
         )
 
-        # HTML version (existing content)
+        # HTML version
         html_part = MIMEText(html_body, "html")
 
         msg.attach(text_part)
@@ -261,34 +391,113 @@ def send_email_simple(to_email: str, subject: str, html_body: str):
     except Exception as e:
         st.error(f"Email sending failed: {str(e)}")
         return False
+
+# ============================================================
+# FIXED: SESSION STATE INITIALIZATION
+# ============================================================
+
+def initialize_session_state():
+    """Initialize all session state variables"""
+    defaults = {
+        "authenticated": False,
+        "username": None,
+        "name": None,
+        "auth_token": None,
+        "prefs_loaded": False,
+        "prefs": None,
+        "last_activity": None,
+        "page_loaded": False
+    }
+    
+    for key, default_value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = default_value
+
+# ============================================================
+# FIXED: RESTORE SESSION FROM TOKEN
+# ============================================================
+
+def restore_session_from_token():
+    """Restore session from auth token"""
+    # Don't restore if already authenticated
+    if st.session_state.get("authenticated", False):
+        return True
+    
+    # Check for token in query params
+    params = st.query_params
+    if "auth_token" in params:
+        token = params["auth_token"]
+        st.session_state.auth_token = token
         
-def _price_cache_path(tickers, start, end):
-    key = "_".join(sorted(tickers)) + f"_{start}_{end or 'latest'}"
-    return os.path.join(
-        PRICE_CACHE_DIR,
-        f"{hashlib.md5(key.encode()).hexdigest()}.parquet"
+    # Check session state token
+    token = st.session_state.get("auth_token")
+    if not token:
+        return False
+    
+    username = validate_auth_token(token)
+    if not username:
+        return False
+    
+    user = get_user(username)
+    if user and user[5] == 1:  # is_active check
+        st.session_state.update({
+            "authenticated": True,
+            "username": username,
+            "name": user[1],
+            "last_activity": datetime.now()
+        })
+        
+        # Load preferences
+        if not st.session_state.get("prefs_loaded", False):
+            st.session_state.prefs = load_user_prefs(username)
+            st.session_state.prefs_loaded = True
+            
+        return True
+    
+    return False
+
+# ============================================================
+# FIXED: SYNC TOKEN TO/FROM BROWSER
+# ============================================================
+
+def sync_auth_token_to_browser(token):
+    """Inject JavaScript to store token in localStorage"""
+    components.html(
+        f"""
+        <script>
+        const token = "{token}";
+        if (token && token.length > 10) {{
+            localStorage.setItem("sigma_auth_token", token);
+            console.log("Token stored in localStorage");
+        }}
+        </script>
+        """,
+        height=0
     )
 
-
-def load_price_data_cached(tickers, start_date, end_date=None):
-    path = _price_cache_path(tickers, start_date, end_date)
-
-    if os.path.exists(path):
-        try:
-            return pd.read_parquet(path)
-        except Exception:
-            pass  # fallback to download
-
-    prices = load_price_data(tickers, start_date, end_date)
-    prices.to_parquet(path)
-    return prices
+def sync_auth_token_from_browser():
+    """Read token from localStorage and update session state"""
+    components.html(
+        """
+        <script>
+        const token = localStorage.getItem("sigma_auth_token");
+        if (token) {
+            window.parent.postMessage({
+                type: "STREAMLIT_TOKEN",
+                token: token
+            }, "*");
+        }
+        </script>
+        """,
+        height=0
+    )
 
 # ============================================================
 # USER DATA PERSISTENCE
 # ============================================================
 
 DEFAULT_PREFS = {
-    "start_date": "1900-01-01",
+    "start_date": "2010-01-01",  # Changed to more reasonable date
     "risk_on_tickers": "TQQQ",
     "risk_on_weights": "1.0",
     "risk_off_tickers": "AGG",
@@ -362,7 +571,7 @@ A "Risk Off Regime" = 200 Day SMA > Risk On Allocation Index.
 """)
 
 # CONFIG
-DEFAULT_START_DATE = "1900-01-01"
+DEFAULT_START_DATE = "2010-01-01"  # Updated to reasonable date
 RISK_FREE_RATE = 0.0
 RISK_ON_WEIGHTS = {"TQQQ": 1.0}
 RISK_OFF_WEIGHTS = {"AGG": 1.0}
@@ -370,23 +579,12 @@ FLIP_COST = 0.0000
 START_RISKY = 0.6
 START_SAFE  = 0.4
 
-@st.cache_data(show_spinner=True, ttl=3600)
-def load_price_data(tickers, start_date, end_date=None):
-    data = yf.download(tickers, start=start_date, end=end_date, progress=False)
-
-    if "Adj Close" in data.columns:
-        px = data["Adj Close"].copy()
-        if "Close" in data.columns:
-            px = px.combine_first(data["Close"])
-    else:
-        px = data["Close"].copy()
-
-    if isinstance(px, pd.Series):
-        px = px.to_frame(name=tickers[0])
-
-    return px.dropna(how="all")
+# FIXED: Remove duplicate load_price_data function, using the enhanced one above
 
 def build_portfolio_index(prices, weights_dict, annual_drag_pct=0.0):
+    if prices.empty:
+        return pd.Series([1.0], index=[datetime.now().date()])
+    
     simple_rets = prices.pct_change().fillna(0)
     idx_rets = pd.Series(0.0, index=simple_rets.index)
 
@@ -413,6 +611,9 @@ def build_portfolio_index(prices, weights_dict, annual_drag_pct=0.0):
     return cumprod_filled
 
 def compute_ma(price_series, length, ma_type):
+    if price_series.empty:
+        return pd.Series([], dtype=float)
+    
     if ma_type.lower() == "ema":
         ma = price_series.ewm(span=length, adjust=False).mean()
     else:
@@ -421,6 +622,9 @@ def compute_ma(price_series, length, ma_type):
     return ma.shift(1)
 
 def generate_testfol_signal_vectorized(price, ma, tol_series, min_holding_days=5):
+    if price.empty or ma.empty:
+        return pd.Series(False, index=price.index if not price.empty else ma.index)
+    
     px = price.values
     ma_vals = ma.values
     n = len(px)
@@ -486,6 +690,9 @@ def run_sig_engine(
     quarterly_multiplier=4.0,
     ma_flip_multiplier=4.0
 ):
+    if risk_on_returns.empty:
+        empty_series = pd.Series([], dtype=float)
+        return empty_series, empty_series, empty_series, []
 
     dates = risk_on_returns.index
     n = len(dates)
@@ -632,7 +839,7 @@ def compute_enhanced_performance(simple_returns, eq_curve, rf=0.0):
     gross_loss = abs(negative_rets.sum())
     profit_factor = gross_profit / gross_loss if gross_loss > 0 else 0
     
-    var_95 = np.percentile(simple_returns, 5) * np.sqrt(252)
+    var_95 = np.percentile(simple_returns, 5) * np.sqrt(252) if len(simple_returns) > 0 else 0
     cvar_95 = simple_returns[simple_returns <= np.percentile(simple_returns, 5)].mean() * np.sqrt(252) if len(simple_returns) > 0 else 0
     
     skewness = simple_returns.skew() if len(simple_returns) > 0 else 0
@@ -668,6 +875,16 @@ def compute_enhanced_performance(simple_returns, eq_curve, rf=0.0):
     }
 
 def backtest(prices, signal, risk_on_weights, risk_off_weights, flip_cost, ma_flip_multiplier=3.0, annual_drag_pct=0.0):
+    if prices.empty:
+        return {
+            "returns": pd.Series([], dtype=float),
+            "equity_curve": pd.Series([], dtype=float),
+            "signal": pd.Series([], dtype=bool),
+            "weights": pd.DataFrame(),
+            "performance": compute_enhanced_performance(pd.Series([], dtype=float), pd.Series([], dtype=float)),
+            "flip_mask": pd.Series([], dtype=bool),
+        }
+    
     simple = prices.pct_change().fillna(0)
     weights = build_weight_df(prices, signal, risk_on_weights, risk_off_weights)
 
@@ -713,6 +930,12 @@ def normalize(eq):
     return eq / eq.iloc[0] * 10000
 
 def plot_diagnostics(hybrid_eq, bh_eq, hybrid_signal):
+    if hybrid_eq.empty or bh_eq.empty:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.text(0.5, 0.5, 'Insufficient data for diagnostics', 
+                ha='center', va='center', transform=ax.transAxes)
+        return fig
+    
     hybrid_eq = hybrid_eq / hybrid_eq.iloc[0]
     bh_eq     = bh_eq / bh_eq.iloc[0]
 
@@ -722,7 +945,7 @@ def plot_diagnostics(hybrid_eq, bh_eq, hybrid_signal):
     hybrid_dd = hybrid_eq / hybrid_eq.cummax() - 1
     bh_dd = bh_eq / bh_eq.cummax() - 1
 
-    window = 252
+    window = min(252, len(hybrid_ret))
     roll_sharpe_h = hybrid_ret.rolling(window).mean() / hybrid_ret.rolling(window).std() * np.sqrt(252)
     roll_sharpe_b = bh_ret.rolling(window).mean() / bh_ret.rolling(window).std() * np.sqrt(252)
 
@@ -936,240 +1159,207 @@ def plot_monte_carlo_results(results_dict, strategy_names):
     plt.tight_layout()
     return fig
 
-def restore_session_from_token():
-    if st.session_state.get("authenticated"):
-        return
-
-    token = st.session_state.get("auth_token")
-    if not token:
-        return
-
-    username = validate_auth_token(token)
-    if not username:
-        return
-
-    user = get_user(username)
-    if user and user[5] == 1:
-        st.session_state.authenticated = True
-        st.session_state.username = username
-        st.session_state.name = user[1]
-        st.session_state.prefs = load_user_prefs(username)
-
-def sync_auth_token_from_browser():
-    components.html(
-        """
-        <script>
-        const token = localStorage.getItem("sigma_auth_token");
-        if (token) {
-            window.parent.postMessage(
-                { type: "AUTH_TOKEN", token: token },
-                "*"
-            );
-        }
-        </script>
-        """,
-        height=0
-    )
-
 # ============================================================
 # STREAMLIT APP - MAIN FUNCTION
 # ============================================================
 
 def main():
     st.set_page_config(
-        page_title="Portfolio MA Regime Strategy",
+        page_title="Sigma Strategy System",
         layout="wide",
-        page_icon="📈"
+        page_icon="📈",
+        initial_sidebar_state="expanded"
     )
-    params = st.query_params
-    sync_auth_token_from_browser()
-
-    if "auth_token" not in st.session_state:
-        st.session_state.auth_token = None
     
     # Initialize session state
-    if "authenticated" not in st.session_state:
-        st.session_state.authenticated = False
-    if "username" not in st.session_state:
-        st.session_state.username = None
-    if "name" not in st.session_state:
-        st.session_state.name = None
-
-    restore_session_from_token()
+    initialize_session_state()
     
-    # Password reset
+    # Handle message from JavaScript for token
+    if not st.session_state.page_loaded:
+        sync_auth_token_from_browser()
+        st.session_state.page_loaded = True
+    
+    # Check for password reset
+    params = st.query_params
     if "reset" in params:
-        st.title("Reset Password")
-        reset_user = validate_token(params["reset"])
-        if not reset_user:
-            st.error("❌ Reset link is invalid or expired.")
-            st.stop()
-        
-        with st.form("reset_password_form"):
-            st.write(f"Setting new password for user: **{reset_user}**")
-            pw1 = st.text_input("New Password", type="password", key="pw1")
-            pw2 = st.text_input("Confirm Password", type="password", key="pw2")
-            submit = st.form_submit_button("Reset Password")
-            
-            if submit:
-                if not pw1 or pw1 != pw2:
-                    st.error("Passwords do not match.")
-                elif len(pw1) < 8:
-                    st.error("Password must be at least 8 characters.")
-                else:
-                    with get_db() as conn:
-                        conn.execute(
-                            "UPDATE users SET password_hash = ? WHERE username = ?",
-                            (hash_password(pw1), reset_user)
-                        )
-                    consume_token(reset_user)
-                    st.success("✅ Password reset successfully! You may now log in.")
-                    if st.button("Go to Login"):
-                        st.query_params.clear()
-                        st.rerun()
+        handle_password_reset(params["reset"])
+        return
+    
+    # Try to restore session from token
+    if not st.session_state.authenticated:
+        if restore_session_from_token():
+            st.rerun()
+        else:
+            show_auth_interface()
+            return
+    
+    # User is authenticated - show main app
+    show_main_interface()
+
+def handle_password_reset(token):
+    """Handle password reset flow"""
+    st.title("Reset Password")
+    reset_user = validate_token(token)
+    if not reset_user:
+        st.error("❌ Reset link is invalid or expired.")
         st.stop()
     
-    # ============================================================
-    # AUTHENTICATION GATE
-    # ============================================================
-    
-    if not st.session_state.authenticated:
-        # Show login/signup interface
-        tab1, tab2, tab3 = st.tabs(["Login", "Sign Up", "Reset Password"])
+    with st.form("reset_password_form"):
+        st.write(f"Setting new password for user: **{reset_user}**")
+        pw1 = st.text_input("New Password", type="password", key="pw1")
+        pw2 = st.text_input("Confirm Password", type="password", key="pw2")
+        submit = st.form_submit_button("Reset Password")
         
-        with tab1:
-            st.subheader("Login")
-            with st.form("login_form"):
-                username = st.text_input("Username")
-                password = st.text_input("Password", type="password")
-                submit = st.form_submit_button("Login")
-                
-                if submit:
-                    if not username or not password:
-                        st.error("Please enter username and password")
-                    else:
-                        user_data = get_user(username)
-                        if user_data:
-                            if user_data[5] == 0:  # is_active check
-                                st.error("Account is disabled. Please contact support.")
-                            elif verify_password(password, user_data[3]):
-                                update_last_login(username)
+        if submit:
+            if not pw1 or pw1 != pw2:
+                st.error("Passwords do not match.")
+            elif len(pw1) < 8:
+                st.error("Password must be at least 8 characters.")
+            else:
+                with get_db() as conn:
+                    conn.execute(
+                        "UPDATE users SET password_hash = ? WHERE username = ?",
+                        (hash_password(pw1), reset_user)
+                    )
+                consume_token(reset_user)
+                st.success("✅ Password reset successfully! You may now log in.")
+                if st.button("Go to Login"):
+                    st.query_params.clear()
+                    st.rerun()
+    st.stop()
 
+def show_auth_interface():
+    """Show authentication interface (login/signup/reset)"""
+    st.title("Sigma Strategy System")
+    
+    tab1, tab2, tab3 = st.tabs(["Login", "Sign Up", "Reset Password"])
+    
+    with tab1:
+        st.subheader("Login")
+        with st.form("login_form"):
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            remember = st.checkbox("Remember me for 30 days", value=True)
+            submit = st.form_submit_button("Login")
+            
+            if submit:
+                if not username or not password:
+                    st.error("Please enter username and password")
+                else:
+                    user_data = get_user(username)
+                    if user_data:
+                        if user_data[5] == 0:  # is_active check
+                            st.error("Account is disabled. Please contact support.")
+                        elif verify_password(password, user_data[3]):
+                            update_last_login(username)
+                            
+                            # Create auth token if "remember me" is checked
+                            if remember:
                                 token = create_auth_token(username)
-
-                                st.session_state.update({
-                                    "authenticated": True,
-                                    "username": username,
-                                    "name": user_data[1],
-                                    "prefs": load_user_prefs(username),
-                                    "auth_token": token
-                                })
-
-                                components.html(
-                                    f"""
-                                    <script>
-                                    localStorage.setItem("sigma_auth_token", "{token}");
-                                    </script>
-                                    """,
-                                    height=0
-                                )
-
-
-                                st.success(f"Welcome back, {user_data[1]}!")
-                                st.rerun()
-                            else:
-                                st.error("Invalid username or password")
+                                st.session_state.auth_token = token
+                                sync_auth_token_to_browser(token)
+                            
+                            st.session_state.update({
+                                "authenticated": True,
+                                "username": username,
+                                "name": user_data[1],
+                                "prefs": load_user_prefs(username),
+                                "prefs_loaded": True,
+                                "last_activity": datetime.now()
+                            })
+                            
+                            st.success(f"Welcome back, {user_data[1]}!")
+                            st.rerun()
                         else:
                             st.error("Invalid username or password")
-        
-        with tab2:
-            st.subheader("Create New Account")
-            with st.form("signup_form"):
-                new_username = st.text_input("Username", help="Choose a unique username")
-                new_name = st.text_input("Full Name")
-                new_email = st.text_input("Email")
-                new_pw = st.text_input("Password", type="password", 
-                                      help="At least 8 characters")
-                new_pw2 = st.text_input("Confirm Password", type="password")
-                submit = st.form_submit_button("Create Account")
-                
-                if submit:
-                    # Validation
-                    errors = []
-                    if not all([new_username, new_name, new_email, new_pw]):
-                        errors.append("All fields are required")
-                    if len(new_pw) < 8:
-                        errors.append("Password must be at least 8 characters")
-                    if new_pw != new_pw2:
-                        errors.append("Passwords do not match")
-                    if username_exists(new_username):
-                        errors.append("Username already exists")
-                    if email_exists(new_email):
-                        errors.append("Email already registered")
-                    if "@" not in new_email or "." not in new_email:
-                        errors.append("Invalid email format")
-                    
-                    if errors:
-                        for error in errors:
-                            st.error(error)
                     else:
-                        try:
-                            create_user(new_username, new_name, new_email, new_pw)
-                            st.success("✅ Account created successfully! You can now log in.")
+                        st.error("Invalid username or password")
+    
+    with tab2:
+        st.subheader("Create New Account")
+        with st.form("signup_form"):
+            new_username = st.text_input("Username", help="Choose a unique username")
+            new_name = st.text_input("Full Name")
+            new_email = st.text_input("Email")
+            new_pw = st.text_input("Password", type="password", 
+                                  help="At least 8 characters")
+            new_pw2 = st.text_input("Confirm Password", type="password")
+            submit = st.form_submit_button("Create Account")
+            
+            if submit:
+                # Validation
+                errors = []
+                if not all([new_username, new_name, new_email, new_pw]):
+                    errors.append("All fields are required")
+                if len(new_pw) < 8:
+                    errors.append("Password must be at least 8 characters")
+                if new_pw != new_pw2:
+                    errors.append("Passwords do not match")
+                if username_exists(new_username):
+                    errors.append("Username already exists")
+                if email_exists(new_email):
+                    errors.append("Email already registered")
+                if "@" not in new_email or "." not in new_email:
+                    errors.append("Invalid email format")
+                
+                if errors:
+                    for error in errors:
+                        st.error(error)
+                else:
+                    try:
+                        create_user(new_username, new_name, new_email, new_pw)
+                        st.success("✅ Account created successfully! You can now log in.")
+                    except Exception as e:
+                        st.error(f"Error creating account: {str(e)}")
+    
+    with tab3:
+        st.subheader("Forgot Password")
+        with st.form("forgot_password_form"):
+            reset_email = st.text_input("Enter your email address")
+            submit = st.form_submit_button("Send Reset Link")
+            
+            if submit:
+                with get_db() as conn:
+                    row = conn.execute(
+                        "SELECT username FROM users WHERE email = ?",
+                        (reset_email,)
+                    ).fetchone()
+                
+                if row:
+                    token = create_token(row[0])
+                    # Get app URL from environment or use localhost
+                    app_url = os.getenv("APP_URL", st.secrets.get("APP_URL", "http://localhost:8501"))
+                    reset_link = f"{app_url}?reset={token}"
+                    
+                    email_sent = send_email_simple(
+                        reset_email,
+                        "Reset Your Password - Sigma Strategy System",
+                        f"""
+                        <h3>Password Reset Request</h3>
+                        <p>You requested to reset your password. Click the link below:</p>
+                        <p><a href="{reset_link}">Reset Password</a></p>
+                        <p>This link will expire in 30 minutes.</p>
+                        <p>If you didn't request this, you can safely ignore this email.</p>
+                        """
+                    )
+                    
+                    if email_sent:
+                        st.success("Password reset link sent to your email.")
+                    else:
+                        st.error("Failed to send reset email. Please try again later.")
+                else:
+                    st.error("No verified account found with that email.")
 
-                        except Exception as e:
-                            st.error(f"Error creating account: {str(e)}")
-        
-        with tab3:
-            st.subheader("Forgot Password")
-            with st.form("forgot_password_form"):
-                reset_email = st.text_input("Enter your email address")
-                submit = st.form_submit_button("Send Reset Link")
-                
-                if submit:
-                    with get_db() as conn:
-                        row = conn.execute(
-                            "SELECT username FROM users WHERE email = ?",
-                            (reset_email,)
-                        ).fetchone()
-                    
-                    if row:
-                        token = create_token(row[0])
-                        app_url = st.secrets.get("APP_URL", "http://localhost:8501")
-                        reset_link = f"{app_url}?reset={token}"
-                        
-                        email_sent = send_email_simple(
-                            reset_email,
-                            "Reset Your Password - Portfolio Strategy App",
-                            f"""
-                            <h3>Password Reset Request</h3>
-                            <p>You requested to reset your password. Click the link below:</p>
-                            <p><a href="{reset_link}">Reset Password</a></p>
-                            <p>This link will expire in 30 minutes.</p>
-                            <p>If you didn't request this, you can safely ignore this email.</p>
-                            """
-                        )
-                        
-                        if email_sent:
-                            st.success("Password reset link sent to your email.")
-                        else:
-                            st.error("Failed to send reset email. Please try again later.")
-                    else:
-                        st.error("No verified account found with that email.")
-        
-        st.stop()  # Stop here if not authenticated
-    
-    # ============================================================
-    # AUTHENTICATED USER INTERFACE
-    # ============================================================
-    
+def show_main_interface():
+    """Show the main application interface for authenticated users"""
     # Logout button in sidebar
     with st.sidebar:
         st.title(f"Welcome {st.session_state.name}!")
         if st.button("🚪 Logout", type="primary", use_container_width=True):
-            if "auth_token" in st.session_state:
-                revoke_auth_token(st.session_state.auth_token)
-
+            # Revoke all tokens for this user
+            revoke_all_user_tokens(st.session_state.username)
+            
+            # Clear local storage
             components.html(
                 """
                 <script>
@@ -1178,20 +1368,22 @@ def main():
                 """,
                 height=0
             )
-
-
+            
+            # Clear session state
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
-
+            
+            st.query_params.clear()
             st.rerun()
     
     # Main app content
     show_strategy_overview()
     st.markdown("---")
     
-    # Load user preferences
-    if "prefs" not in st.session_state:
+    # Load user preferences if not loaded
+    if not st.session_state.get("prefs_loaded", False):
         st.session_state.prefs = load_user_prefs(st.session_state.username)
+        st.session_state.prefs_loaded = True
     
     prefs = st.session_state.prefs
     
@@ -1204,16 +1396,16 @@ def main():
         risk_on_weights_str = st.text_input("Risk On Weights", prefs["risk_on_weights"])
         risk_off_tickers_str = st.text_input("Risk Off Tickers", prefs["risk_off_tickers"])
         risk_off_weights_str = st.text_input("Risk Off Weights", prefs["risk_off_weights"])
-        annual_drag = st.number_input("Annual Drag %", value=float(prefs["annual_drag_pct"]))
+        annual_drag = st.number_input("Annual Drag %", value=float(prefs["annual_drag_pct"]), min_value=0.0, max_value=100.0, step=0.1)
     
     with st.sidebar.expander("Portfolio Values", expanded=True):
-        qs_cap_1 = st.number_input("Portfolio Value at Last Rebalance", value=float(prefs["qs_cap_1"]))
-        real_cap_1 = st.number_input("Portfolio Value Today", value=float(prefs["real_cap_1"]))
+        qs_cap_1 = st.number_input("Portfolio Value at Last Rebalance", value=float(prefs["qs_cap_1"]), min_value=0.0, step=1000.0)
+        real_cap_1 = st.number_input("Portfolio Value Today", value=float(prefs["real_cap_1"]), min_value=0.0, step=1000.0)
     
     with st.sidebar.expander("Advanced Settings", expanded=False):
         inception_date = st.text_input("Inception Date", prefs["official_inception_date"])
         benchmark = st.text_input("Benchmark", prefs["benchmark_ticker"])
-        min_days = st.number_input("Confirmation Days", value=int(prefs["min_holding_days"]), min_value=1)
+        min_days = st.number_input("Confirmation Days", value=int(prefs["min_holding_days"]), min_value=1, max_value=30)
     
     # Save settings button
     if st.sidebar.button("💾 Save Settings", type="secondary", use_container_width=True):
@@ -1233,38 +1425,72 @@ def main():
         }
         save_user_prefs(st.session_state.username, st.session_state.prefs)
         st.sidebar.success("Settings saved!")
+        st.rerun()
     
     # Run analysis button
     run_clicked = st.sidebar.button("🚀 Run Analysis", type="primary", use_container_width=True)
     
     if not run_clicked:
         st.info("Adjust settings in sidebar and click 'Run Analysis' to begin.")
-        st.stop()
+        return
     
     # ============================================================
-    # TRADING STRATEGY EXECUTION (From your original code)
+    # TRADING STRATEGY EXECUTION
     # ============================================================
     
     # Process inputs
     try:
-        risk_on_tickers = [t.strip().upper() for t in risk_on_tickers_str.split(",")]
-        risk_on_weights_list = [float(x) for x in risk_on_weights_str.split(",")]
+        # Parse tickers and weights
+        risk_on_tickers = [t.strip().upper() for t in risk_on_tickers_str.split(",") if t.strip()]
+        risk_on_weights_list = [float(x.strip()) for x in risk_on_weights_str.split(",") if x.strip()]
+        
+        # Ensure we have matching counts
+        if len(risk_on_tickers) != len(risk_on_weights_list):
+            st.error(f"Mismatch: {len(risk_on_tickers)} tickers but {len(risk_on_weights_list)} weights")
+            return
+        
         risk_on_weights = dict(zip(risk_on_tickers, risk_on_weights_list))
         
-        risk_off_tickers = [t.strip().upper() for t in risk_off_tickers_str.split(",")]
-        risk_off_weights_list = [float(x) for x in risk_off_weights_str.split(",")]
+        risk_off_tickers = [t.strip().upper() for t in risk_off_tickers_str.split(",") if t.strip()]
+        risk_off_weights_list = [float(x.strip()) for x in risk_off_weights_str.split(",") if x.strip()]
+        
+        if len(risk_off_tickers) != len(risk_off_weights_list):
+            st.error(f"Mismatch: {len(risk_off_tickers)} tickers but {len(risk_off_weights_list)} weights")
+            return
+        
         risk_off_weights = dict(zip(risk_off_tickers, risk_off_weights_list))
         
         annual_drag_decimal = annual_drag / 100.0
         
-        all_tickers = sorted(set(risk_on_tickers + risk_off_tickers))
-        prices = load_price_data_cached(all_tickers, start)
+        # Combine all tickers
+        all_tickers = list(set(risk_on_tickers + risk_off_tickers))
         
-        if len(prices) == 0:
+        # Load price data with progress
+        with st.spinner(f"Loading price data for {len(all_tickers)} tickers..."):
+            prices = load_price_data_cached(all_tickers, start)
+        
+        if prices.empty:
             st.error("No data loaded. Please check your ticker symbols and date range.")
-            st.stop()
+            
+            # Try alternative tickers
+            st.info("Trying alternative ETFs...")
+            alternative_on = ["SPY"]  # S&P 500 ETF
+            alternative_off = ["BND"]  # Total bond market ETF
+            
+            with st.spinner("Loading alternative data..."):
+                alt_prices = load_price_data_cached(alternative_on + alternative_off, start)
+            
+            if not alt_prices.empty:
+                st.info(f"Using alternative tickers: Risk On={alternative_on}, Risk Off={alternative_off}")
+                risk_on_tickers = alternative_on
+                risk_on_weights = {alternative_on[0]: 1.0}
+                risk_off_tickers = alternative_off
+                risk_off_weights = {alternative_off[0]: 1.0}
+                prices = alt_prices
+            else:
+                return
         
-        # Show loading progress
+        # Show loading progress for analysis
         with st.spinner("Running analysis..."):
             
             # MA setup
@@ -1288,7 +1514,7 @@ def main():
             best_result = backtest(prices, sig, risk_on_weights, risk_off_weights, FLIP_COST, 
                                   ma_flip_multiplier=3.0, annual_drag_pct=annual_drag_decimal)
             
-            latest_signal = sig.iloc[-1]
+            latest_signal = sig.iloc[-1] if not sig.empty else False
             current_regime = "Risk On" if latest_signal else "Risk Off"
             
             # Get returns data
@@ -1366,7 +1592,7 @@ def main():
             bh_eq_si = risk_on_eq.loc[risk_on_eq.index >= inception]
             bh_ret_si = bh_eq_si.pct_change().fillna(0)
             
-            benchmark_px = load_price_data([benchmark], inception)
+            benchmark_px = load_price_data_cached([benchmark], inception)
             if not benchmark_px.empty and benchmark in benchmark_px.columns:
                 benchmark_eq_si = (benchmark_px[benchmark] / benchmark_px[benchmark].iloc[0]).reindex(sigma_eq_si.index).ffill()
                 benchmark_ret_si = benchmark_eq_si.pct_change().fillna(0)
@@ -1439,28 +1665,33 @@ def main():
         
         if len(hybrid_rebals) > 0:
             quarter_start_date = hybrid_rebals[-1]
-            risky_start = qs_cap_1 * float(hybrid_rw.loc[quarter_start_date])
-            risky_today = real_cap_1 * float(hybrid_rw.iloc[-1])
-            progress = compute_quarter_progress(risky_start, risky_today, quarterly_target)
-            
-            gap = progress['Gap ($)']
-            date_str = next_q_end.strftime("%m/%d/%Y")
-            days_str = f"{days_to_next_q} days"
-            dollar_amount = f"${abs(gap):,.2f}"
-            
-            if gap > 0:
-                st.warning(f"**Action Needed:** Sell {dollar_amount} of Risk Off and Buy {dollar_amount} of Risk On")
-                st.info(f"**Next Rebalance:** {date_str} ({days_str})")
-            elif gap < 0:
-                st.warning(f"**Action Needed:** Sell {dollar_amount} of Risk On and Buy {dollar_amount} of Risk Off")
-                st.info(f"**Next Rebalance:** {date_str} ({days_str})")
+            if quarter_start_date in hybrid_rw.index:
+                risky_start = qs_cap_1 * float(hybrid_rw.loc[quarter_start_date])
+                risky_today = real_cap_1 * float(hybrid_rw.iloc[-1])
+                progress = compute_quarter_progress(risky_start, risky_today, quarterly_target)
+                
+                gap = progress['Gap ($)']
+                date_str = next_q_end.strftime("%m/%d/%Y")
+                days_str = f"{days_to_next_q} days"
+                dollar_amount = f"${abs(gap):,.2f}"
+                
+                if gap > 0:
+                    st.warning(f"**Action Needed:** Sell {dollar_amount} of Risk Off and Buy {dollar_amount} of Risk On")
+                    st.info(f"**Next Rebalance:** {date_str} ({days_str})")
+                elif gap < 0:
+                    st.warning(f"**Action Needed:** Sell {dollar_amount} of Risk On and Buy {dollar_amount} of Risk Off")
+                    st.info(f"**Next Rebalance:** {date_str} ({days_str})")
+                else:
+                    st.success(f"**No rebalance needed until {date_str} ({days_str})**")
+                
+                # Show progress table
+                progress_df = pd.DataFrame.from_dict(progress, orient='index', columns=['Value'])
+                progress_df.loc["Gap (%)"] = f"{progress['Gap (%)']:.2%}"
+                st.dataframe(progress_df)
             else:
-                st.success(f"**No rebalance needed until {date_str} ({days_str})**")
-            
-            # Show progress table
-            progress_df = pd.DataFrame.from_dict(progress, orient='index', columns=['Value'])
-            progress_df.loc["Gap (%)"] = f"{progress['Gap (%)']:.2%}"
-            st.dataframe(progress_df)
+                st.info("No recent rebalance data available.")
+        else:
+            st.info("No rebalance events in the analyzed period.")
         
         # Allocation tables
         st.subheader("💼 Portfolio Allocations")
@@ -1485,88 +1716,101 @@ def main():
             alloc = compute_allocations(real_cap_1, hyb_r, hyb_s, risk_on_weights, risk_off_weights)
             alloc_df = pd.DataFrame.from_dict(alloc, orient="index", columns=["$"])
             total = alloc_df["$"].sum()
-            alloc_df["% Portfolio"] = (alloc_df["$"] / total * 100).apply(lambda x: f"{x:.2f}%")
+            if total > 0:
+                alloc_df["% Portfolio"] = (alloc_df["$"] / total * 100).apply(lambda x: f"{x:.2f}%")
             st.dataframe(alloc_df)
         
         with tab2:
             alloc = compute_allocations(real_cap_1, pure_r, pure_s, risk_on_weights, risk_off_weights)
             alloc_df = pd.DataFrame.from_dict(alloc, orient="index", columns=["$"])
             total = alloc_df["$"].sum()
-            alloc_df["% Portfolio"] = (alloc_df["$"] / total * 100).apply(lambda x: f"{x:.2f}%")
+            if total > 0:
+                alloc_df["% Portfolio"] = (alloc_df["$"] / total * 100).apply(lambda x: f"{x:.2f}%")
             st.dataframe(alloc_df)
         
         with tab3:
             if latest_signal:
-                alloc = compute_allocations(real_cap_1, 1.0, 0.0, risk_on_weights, {"SHY": 0})
+                alloc = compute_allocations(real_cap_1, 1.0, 0.0, risk_on_weights, {})
             else:
                 alloc = compute_allocations(real_cap_1, 0.0, 1.0, {}, risk_off_weights)
             alloc_df = pd.DataFrame.from_dict(alloc, orient="index", columns=["$"])
             total = alloc_df["$"].sum()
-            alloc_df["% Portfolio"] = (alloc_df["$"] / total * 100).apply(lambda x: f"{x:.2f}%")
+            if total > 0:
+                alloc_df["% Portfolio"] = (alloc_df["$"] / total * 100).apply(lambda x: f"{x:.2f}%")
             st.dataframe(alloc_df)
         
         # MA distance
         st.subheader("📐 200-Day SMA Crossover Distance")
         if len(opt_ma) > 0 and len(portfolio_index) > 0:
-            latest_date = opt_ma.dropna().index[-1]
-            P = float(portfolio_index.loc[latest_date])
-            MA = float(opt_ma.loc[latest_date])
-            upper = MA * (1 + tolerance_decimal)
-            lower = MA * (1 - tolerance_decimal)
-            
-            if latest_signal:
-                delta = (P - lower) / P
-                st.info(f"**Drop Required for Crossover:** {delta:.2%}")
-            else:
-                delta = (upper - P) / P
-                st.info(f"**Gain Required for Crossover:** {delta:.2%}")
-        
-        # Monte Carlo Analysis
-        st.subheader("🎲 Monte Carlo Stress Testing")
-        
-        total_current_portfolio = real_cap_1
-        strategies_mc = {
-            "MA Strategy": {"returns": best_result["returns"], "equity": best_result["equity_curve"], "initial_capital": total_current_portfolio},
-            "Buy & Hold": {"returns": risk_on_simple, "equity": risk_on_eq, "initial_capital": total_current_portfolio},
-            "Sigma": {"returns": hybrid_simple, "equity": hybrid_eq, "initial_capital": total_current_portfolio},
-        }
-        
-        with st.spinner("Running Monte Carlo simulations..."):
-            mc_results = {}
-            for name, data in strategies_mc.items():
-                if len(data["returns"]) > 100:
-                    mc_results[name] = monte_carlo_strategy_analysis(
-                        data["returns"], data["equity"], n_sim=5000, periods=252, initial_capital=data["initial_capital"]
-                    )
-            
-            if any(v is not None for v in mc_results.values()):
-                mc_fig = plot_monte_carlo_results(mc_results, list(strategies_mc.keys()))
-                st.pyplot(mc_fig)
+            latest_date = opt_ma.dropna().index[-1] if not opt_ma.dropna().empty else None
+            if latest_date and latest_date in portfolio_index.index:
+                P = float(portfolio_index.loc[latest_date])
+                MA = float(opt_ma.loc[latest_date])
+                upper = MA * (1 + tolerance_decimal)
+                lower = MA * (1 - tolerance_decimal)
                 
-                # Show key insights
-                st.subheader("📈 Key Insights")
-                cols = st.columns(3)
-                valid_results = [(name, r) for name, r in mc_results.items() if r is not None]
+                if latest_signal:
+                    delta = (P - lower) / P if P > 0 else 0
+                    st.info(f"**Drop Required for Crossover:** {delta:.2%}")
+                else:
+                    delta = (upper - P) / P if P > 0 else 0
+                    st.info(f"**Gain Required for Crossover:** {delta:.2%}")
+        
+        # Monte Carlo Analysis (if enough data)
+        if len(hybrid_simple) > 100:
+            st.subheader("🎲 Monte Carlo Stress Testing")
+            
+            total_current_portfolio = real_cap_1
+            strategies_mc = {
+                "MA Strategy": {"returns": best_result["returns"], "equity": best_result["equity_curve"], "initial_capital": total_current_portfolio},
+                "Buy & Hold": {"returns": risk_on_simple, "equity": risk_on_eq, "initial_capital": total_current_portfolio},
+                "Sigma": {"returns": hybrid_simple, "equity": hybrid_eq, "initial_capital": total_current_portfolio},
+            }
+            
+            with st.spinner("Running Monte Carlo simulations..."):
+                mc_results = {}
+                for name, data in strategies_mc.items():
+                    if len(data["returns"]) > 100:
+                        mc_results[name] = monte_carlo_strategy_analysis(
+                            data["returns"], data["equity"], n_sim=5000, periods=252, initial_capital=data["initial_capital"]
+                        )
                 
-                if valid_results:
-                    with cols[0]:
-                        safest = min(valid_results, key=lambda x: x[1]['cvar_95'])
-                        st.metric("Most Conservative", safest[0])
-                    with cols[1]:
-                        highest_return = max(valid_results, key=lambda x: x[1]['expected_return'])
-                        st.metric("Highest Expected Return", highest_return[0])
-                    with cols[2]:
-                        highest_prob = max(valid_results, key=lambda x: x[1]['prob_positive'])
-                        st.metric("Highest Win Probability", f"{highest_prob[1]['prob_positive']:.1%}")
+                if any(v is not None for v in mc_results.values()):
+                    mc_fig = plot_monte_carlo_results(mc_results, list(strategies_mc.keys()))
+                    st.pyplot(mc_fig)
+                    
+                    # Show key insights
+                    st.subheader("📈 Key Insights")
+                    cols = st.columns(3)
+                    valid_results = [(name, r) for name, r in mc_results.items() if r is not None]
+                    
+                    if valid_results:
+                        with cols[0]:
+                            safest = min(valid_results, key=lambda x: x[1]['cvar_95'])
+                            st.metric("Most Conservative", safest[0])
+                        with cols[1]:
+                            highest_return = max(valid_results, key=lambda x: x[1]['expected_return'])
+                            st.metric("Highest Expected Return", highest_return[0])
+                        with cols[2]:
+                            highest_prob = max(valid_results, key=lambda x: x[1]['prob_positive'])
+                            st.metric("Highest Win Probability", f"{highest_prob[1]['prob_positive']:.1%}")
         
         # Strategy diagnostics
-        st.subheader("🔍 Strategy Diagnostics")
-        diag_fig = plot_diagnostics(hybrid_eq=hybrid_eq, bh_eq=risk_on_eq, hybrid_signal=sig)
-        st.pyplot(diag_fig)
+        if not hybrid_eq.empty and not risk_on_eq.empty:
+            st.subheader("🔍 Strategy Diagnostics")
+            diag_fig = plot_diagnostics(hybrid_eq=hybrid_eq, bh_eq=risk_on_eq, hybrid_signal=sig)
+            st.pyplot(diag_fig)
         
     except Exception as e:
         st.error(f"Error during analysis: {str(e)}")
         st.info("Please check your inputs and try again.")
+        
+        # Debug info
+        with st.expander("Debug Information"):
+            st.write(f"Error type: {type(e).__name__}")
+            st.write(f"Error details: {str(e)}")
+            import traceback
+            st.code(traceback.format_exc())
 
 # ============================================================
 # APP ENTRY POINT

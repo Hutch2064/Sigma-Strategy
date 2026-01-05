@@ -112,11 +112,11 @@ def email_exists(email: str) -> bool:
         ).fetchone() is not None
 
 def create_user(username: str, name: str, email: str, password: str):
-    """Create new user"""
+    """Create new user (email verification disabled)"""
     with get_db() as conn:
         conn.execute(
-            """INSERT INTO users (username, name, email, password_hash) 
-               VALUES (?, ?, ?, ?)""",
+            """INSERT INTO users (username, name, email, password_hash, email_verified) 
+               VALUES (?, ?, ?, ?, 1)""",
             (username, name, email, hash_password(password))
         )
 
@@ -881,29 +881,6 @@ def main():
     if "name" not in st.session_state:
         st.session_state.name = None
     
-    # ============================================================
-    # EMAIL VERIFICATION & PASSWORD RESET HANDLING
-    # ============================================================
-    
-    params = st.query_params
-    
-    # Email verification
-    if "verify" in params:
-        st.title("Email Verification")
-        username = validate_token(params["verify"])
-        if username:
-            with get_db() as conn:
-                conn.execute(
-                    "UPDATE users SET email_verified = 1 WHERE username = ?",
-                    (username,)
-                )
-            consume_token(username)
-            st.success("✅ Email verified successfully! You can now log in.")
-            st.markdown("[Click here to login](/)" if st.secrets.get("APP_URL") else "Return to the login page")
-        else:
-            st.error("❌ Verification link is invalid or expired.")
-        st.stop()
-    
     # Password reset
     if "reset" in params:
         st.title("Reset Password")
@@ -959,10 +936,7 @@ def main():
                         if user_data:
                             if user_data[5] == 0:  # is_active check
                                 st.error("Account is disabled. Please contact support.")
-                            elif user_data[4] == 0:  # email_verified check
-                                st.error("Email not verified. Please check your email.")
                             elif verify_password(password, user_data[3]):
-                                # Successful login
                                 update_last_login(username)
                                 st.session_state.update({
                                     "authenticated": True,
@@ -1010,32 +984,8 @@ def main():
                     else:
                         try:
                             create_user(new_username, new_name, new_email, new_pw)
-                            token = create_token(new_username, minutes=60)
-                            app_url = st.secrets.get("APP_URL", "http://localhost:8501")
-                            verify_link = f"{app_url}?verify={token}"
-                            
-                            # Send verification email
-                            email_sent = send_email_simple(
-                                            new_email,
-                                            "Verify Your Email - Portfolio Strategy App",
-                                            f"""
-                                            <p style="font-size:12px;color:#666;">
-                                                This is a transactional email to verify your Sigma System account.
-                                            </p>
+                            st.success("✅ Account created successfully! You can now log in.")
 
-                                            <h3>Welcome to Sigma System</h3>
-                                            <p>Please verify your email by clicking the link below:</p>
-                                            <p><a href="{verify_link}">Verify Email Address</a></p>
-
-                                            <p>If you did not create this account, you can safely ignore this email.</p>
-                                            """
-                                        )
-                            
-                            if email_sent:
-                                st.success("✅ Account created! Please check your email to verify your account.")
-                                st.info("Once verified, you can log in with your credentials.")
-                            else:
-                                st.warning("Account created but email verification failed. Please contact support.")
                         except Exception as e:
                             st.error(f"Error creating account: {str(e)}")
         
@@ -1048,7 +998,7 @@ def main():
                 if submit:
                     with get_db() as conn:
                         row = conn.execute(
-                            "SELECT username FROM users WHERE email = ? AND email_verified = 1",
+                            "SELECT username FROM users WHERE email = ?",
                             (reset_email,)
                         ).fetchone()
                     

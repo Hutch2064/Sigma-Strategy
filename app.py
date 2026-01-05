@@ -872,6 +872,7 @@ def main():
         layout="wide",
         page_icon="📈"
     )
+    params = st.query_params
     
     # Initialize session state
     if "authenticated" not in st.session_state:

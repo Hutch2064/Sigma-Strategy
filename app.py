@@ -956,7 +956,7 @@ def restore_session_from_token():
         st.session_state.prefs = load_user_prefs(username)
 
 def sync_auth_token_from_browser():
-    st.components.v1.html(
+    components.html(
         """
         <script>
         const token = localStorage.getItem("sigma_auth_token");
@@ -970,6 +970,7 @@ def sync_auth_token_from_browser():
         """,
         height=0
     )
+
 # ============================================================
 # STREAMLIT APP - MAIN FUNCTION
 # ============================================================
@@ -1064,7 +1065,7 @@ def main():
                                     "auth_token": token
                                 })
 
-                                st.components.v1.html(
+                                components.html(
                                     f"""
                                     <script>
                                     localStorage.setItem("sigma_auth_token", "{token}");
@@ -1072,6 +1073,7 @@ def main():
                                     """,
                                     height=0
                                 )
+
 
                                 st.success(f"Welcome back, {user_data[1]}!")
                                 st.rerun()
@@ -1168,7 +1170,7 @@ def main():
             if "auth_token" in st.session_state:
                 revoke_auth_token(st.session_state.auth_token)
 
-            st.components.v1.html(
+            components.html(
                 """
                 <script>
                 localStorage.removeItem("sigma_auth_token");
@@ -1176,6 +1178,7 @@ def main():
                 """,
                 height=0
             )
+
 
             for key in list(st.session_state.keys()):
                 del st.session_state[key]

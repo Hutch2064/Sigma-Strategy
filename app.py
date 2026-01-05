@@ -21,6 +21,9 @@ from datetime import datetime, timedelta
 DB_PATH = "users.db"
 USER_DATA_DIR = "user_data"
 os.makedirs(USER_DATA_DIR, exist_ok=True)
+PRICE_CACHE_DIR = "price_cache"
+os.makedirs(PRICE_CACHE_DIR, exist_ok=True)
+
 
 def get_db():
     """Get database connection with proper isolation"""
@@ -208,6 +211,27 @@ def send_email_simple(to_email: str, subject: str, html_body: str):
     except Exception as e:
         st.error(f"Email sending failed: {str(e)}")
         return False
+        
+def _price_cache_path(tickers, start, end):
+    key = "_".join(sorted(tickers)) + f"_{start}_{end or 'latest'}"
+    return os.path.join(
+        PRICE_CACHE_DIR,
+        f"{hashlib.md5(key.encode()).hexdigest()}.parquet"
+    )
+
+
+def load_price_data_cached(tickers, start_date, end_date=None):
+    path = _price_cache_path(tickers, start_date, end_date)
+
+    if os.path.exists(path):
+        try:
+            return pd.read_parquet(path)
+        except Exception:
+            pass  # fallback to download
+
+    prices = load_price_data(tickers, start_date, end_date)
+    prices.to_parquet(path)
+    return prices
 
 # ============================================================
 # USER DATA PERSISTENCE
@@ -862,6 +886,20 @@ def plot_monte_carlo_results(results_dict, strategy_names):
     plt.tight_layout()
     return fig
 
+def restore_session_from_db():
+    if "authenticated" in st.session_state and st.session_state.authenticated:
+        return
+
+    username = st.session_state.get("username")
+    if not username:
+        return
+
+    user = get_user(username)
+    if user and user[5] == 1:  # is_active
+        st.session_state.authenticated = True
+        st.session_state.name = user[1]
+        st.session_state.prefs = load_user_prefs(username)
+
 # ============================================================
 # STREAMLIT APP - MAIN FUNCTION
 # ============================================================
@@ -881,6 +919,8 @@ def main():
         st.session_state.username = None
     if "name" not in st.session_state:
         st.session_state.name = None
+
+    restore_session_from_db()
     
     # Password reset
     if "reset" in params:
@@ -1114,7 +1154,7 @@ def main():
         annual_drag_decimal = annual_drag / 100.0
         
         all_tickers = sorted(set(risk_on_tickers + risk_off_tickers))
-        prices = load_price_data(all_tickers, start).dropna(how="any")
+        prices = load_price_data_cached(all_tickers, start)
         
         if len(prices) == 0:
             st.error("No data loaded. Please check your ticker symbols and date range.")

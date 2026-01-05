@@ -1164,8 +1164,21 @@ def main():
     with st.sidebar:
         st.title(f"Welcome {st.session_state.name}!")
         if st.button("🚪 Logout", type="primary", use_container_width=True):
+            if "auth_token" in st.session_state:
+                revoke_auth_token(st.session_state.auth_token)
+
+            st.components.v1.html(
+                """
+                <script>
+                localStorage.removeItem("sigma_auth_token");
+                </script>
+                """,
+                height=0
+            )
+
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
+
             st.rerun()
     
     # Main app content

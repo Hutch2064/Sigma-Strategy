@@ -13,6 +13,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
+import streamlit.components.v1 as components
 
 # ============================================================
 # DATABASE SETUP (Production Ready)

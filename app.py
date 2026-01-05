@@ -182,110 +182,65 @@ def update_last_login(username: str):
         )
 
 def create_token(username: str, minutes: int = 30) -> str:
-    """Create verification/reset token"""
-    raw = secrets.token_urlsafe(32)
-    token_hash = hashlib.sha256(raw.encode()).hexdigest()
-    expires = datetime.utcnow() + timedelta(minutes=minutes)
-
-    with get_db() as conn:
-        # Clean old tokens
-        conn.execute(
-            "DELETE FROM password_resets WHERE username = ? OR expires_at < ?",
-            (username, datetime.utcnow())
-        )
-        conn.execute(
-            """INSERT INTO password_resets (token_hash, username, expires_at) 
-               VALUES (?, ?, ?)""",
-            (token_hash, username, expires)
-        )
-    return raw
-
-def validate_token(raw_token: str):
-    """Validate token and return username if valid"""
-    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
-    now = datetime.utcnow()
-
-    with get_db() as conn:
-        row = conn.execute(
-            """SELECT username FROM password_resets 
-               WHERE token_hash = ? AND expires_at > ?""",
-            (token_hash, now)
-        ).fetchone()
-    return row[0] if row else None
-
-def consume_token(username: str):
-    """Remove used token"""
-    with get_db() as conn:
-        conn.execute(
-            "DELETE FROM password_resets WHERE username = ?",
-            (username,)
-        )
-
-def send_email_simple(to_email: str, subject: str, html_body: str):
-    """Simple email sending function (replace with your email service)"""
-    try:
-        # Using environment variables for email configuration
-        smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-        smtp_port = int(os.getenv("SMTP_PORT", 587))
-        smtp_user = os.getenv("SMTP_USER", "")
-        smtp_password = os.getenv("SMTP_PASSWORD", "")
-        from_email = os.getenv("FROM_EMAIL", "noreply@yourdomain.com")
-        
-        if not all([smtp_user, smtp_password]):
-            st.warning("Email not configured. Please set SMTP environment variables.")
-            return False
-            
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"] = from_email
-        msg["To"] = to_email
-
-        # Plain-text fallback (VERY important for Gmail)
-        text_part = MIMEText(
-            "This email was sent to verify your Sigma System account. "
-            "If you did not create an account, you can ignore this email.",
-            "plain",
-        )
-
-        # HTML version (existing content)
-        html_part = MIMEText(html_body, "html")
-
-        msg.attach(text_part)
-        msg.attach(html_part)
-        
-        with smtplib.SMTP(smtp_server, smtp_port) as server:
-            server.starttls()
-            server.login(smtp_user, smtp_password)
-            server.send_message(msg)
-        return True
-    except Exception as e:
-        st.error(f"Email sending failed: {str(e)}")
-        return False
-        
-def _price_cache_path(tickers, start, end):
-    key = "_".join(sorted(tickers)) + f"_{start}_{end or 'latest'}"
-    return os.path.join(
-        PRICE_CACHE_DIR,
-        f"{hashlib.md5(key.encode()).hexdigest()}.parquet"
-    )
-
-
-def load_price_data_cached(tickers, start_date, end_date=None):
-    path = _price_cache_path(tickers, start_date, end_date)
-
-    if os.path.exists(path):
-        try:
-            return pd.read_parquet(path)
-        except Exception:
-            pass  # fallback to download
-
-    prices = load_price_data(tickers, start_date, end_date)
-    prices.to_parquet(path)
-    return prices
+    """Create verification/reset token"""import numpy as np
+import pandas as pd
+import yfinance as yf
+import matplotlib.pyplot as plt
+import streamlit as st
+import datetime
+from scipy.optimize import minimize
+import yaml
+from yaml.loader import SafeLoader
+import streamlit_authenticator as stauth
+import json
+import os
+import bcrypt
 
 # ============================================================
-# USER DATA PERSISTENCE
+# LOAD AUTH CONFIG (REQUIRED FOR AUTHENTICATOR)
 # ============================================================
+
+if not os.path.exists("config.yaml"):
+    with open("config.yaml", "w") as f:
+        yaml.dump(
+            {
+                "credentials": {"usernames": {}},
+                "cookie": {
+                    "name": "portfolio_app",
+                    "key": "temporary-key-change-later-123",
+                    "expiry_days": 30,
+                },
+            },
+            f,
+        )
+
+with open("config.yaml") as file:
+    config = yaml.load(file, Loader=SafeLoader)
+    
+# ============================================================
+# OPEN SIGNUP HELPERS (OPTION 3)
+# ============================================================
+
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+def username_exists(username: str) -> bool:
+    return username in config["credentials"]["usernames"]
+
+def create_user(username: str, name: str, password: str):
+    config["credentials"]["usernames"][username] = {
+        "name": name,
+        "password": hash_password(password),
+    }
+    with open("config.yaml", "w") as f:
+        yaml.dump(config, f)
+
+# ============================================================
+# USER DATA PERSISTENCE (DISK-BACKED)
+# ============================================================
+
+USER_DATA_DIR = "user_data"
+os.makedirs(USER_DATA_DIR, exist_ok=True)
 
 DEFAULT_PREFS = {
     "start_date": "1900-01-01",
@@ -302,27 +257,76 @@ DEFAULT_PREFS = {
     "min_holding_days": 1,
 }
 
-def _user_file(username: str) -> str:
+def _user_file(username):
     return os.path.join(USER_DATA_DIR, f"{username}.json")
 
-def load_user_prefs(username: str) -> dict:
-    """Load user preferences"""
+def load_user_prefs(username):
     path = _user_file(username)
     if os.path.exists(path):
-        try:
-            with open(path, "r") as f:
-                return json.load(f)
-        except:
-            pass
+        with open(path, "r") as f:
+            return json.load(f)
     return DEFAULT_PREFS.copy()
 
-def save_user_prefs(username: str, prefs: dict):
-    """Save user preferences"""
+def save_user_prefs(username, prefs):
     with open(_user_file(username), "w") as f:
         json.dump(prefs, f, indent=2)
+        
+# ============================================================
+# AUTHENTICATION (COOKIE-PERSISTENT)
+# ============================================================
+
+authenticator = stauth.Authenticate(
+    config["credentials"],
+    config["cookie"]["name"],
+    config["cookie"]["key"],
+    config["cookie"]["expiry_days"],
+)
+
+login_tab, signup_tab = st.tabs(["Login", "Create Account"])
+
+with login_tab:
+    name, authentication_status, username = authenticator.login("Login", "main")
+
+    if authentication_status is False:
+        st.error("Invalid username or password")
+
+with signup_tab:
+    st.subheader("Create Account")
+
+    new_username = st.text_input("Username")
+    new_name = st.text_input("Full Name")
+    new_password = st.text_input("Password", type="password")
+    new_password_confirm = st.text_input("Confirm Password", type="password")
+
+    if st.button("Create Account"):
+        if not new_username or not new_name or not new_password:
+            st.error("All fields are required")
+            st.stop()
+
+        if new_password != new_password_confirm:
+            st.error("Passwords do not match")
+            st.stop()
+
+        if username_exists(new_username):
+            st.error("Username already exists")
+            st.stop()
+
+        create_user(new_username, new_name, new_password)
+        st.success("Account created successfully. Please log in.")
+        st.rerun()
+        
+if authentication_status is not True:
+    st.stop()
+
+st.session_state.username = username
+st.session_state.name = name
+
+# Load persisted user preferences once per session
+if "prefs" not in st.session_state:
+    st.session_state.prefs = load_user_prefs(username)
 
 # ============================================================
-# TRADING STRATEGY FUNCTIONS (From your original code)
+# YOUR STRATEGY FUNCTIONS
 # ============================================================
 
 def show_strategy_overview():
@@ -370,7 +374,7 @@ FLIP_COST = 0.0000
 START_RISKY = 0.6
 START_SAFE  = 0.4
 
-@st.cache_data(show_spinner=True, ttl=3600)
+@st.cache_data(show_spinner=True)
 def load_price_data(tickers, start_date, end_date=None):
     data = yf.download(tickers, start=start_date, end=end_date, progress=False)
 
@@ -936,287 +940,46 @@ def plot_monte_carlo_results(results_dict, strategy_names):
     plt.tight_layout()
     return fig
 
-def restore_session_from_token():
-    if st.session_state.get("authenticated"):
-        return
-
-    token = st.session_state.get("auth_token")
-    if not token:
-        return
-
-    username = validate_auth_token(token)
-    if not username:
-        return
-
-    user = get_user(username)
-    if user and user[5] == 1:
-        st.session_state.authenticated = True
-        st.session_state.username = username
-        st.session_state.name = user[1]
-        st.session_state.prefs = load_user_prefs(username)
-
-def sync_auth_token_from_browser():
-    components.html(
-        """
-        <script>
-        const token = localStorage.getItem("sigma_auth_token");
-        if (token) {
-            window.parent.postMessage(
-                { type: "AUTH_TOKEN", token: token },
-                "*"
-            );
-        }
-        </script>
-        """,
-        height=0
-    )
-
 # ============================================================
-# STREAMLIT APP - MAIN FUNCTION
+# STREAMLIT APP
 # ============================================================
 
 def main():
-    st.set_page_config(
-        page_title="Portfolio MA Regime Strategy",
-        layout="wide",
-        page_icon="📈"
-    )
-    params = st.query_params
-    sync_auth_token_from_browser()
-
-    if "auth_token" not in st.session_state:
-        st.session_state.auth_token = None
+    st.set_page_config(page_title="Portfolio MA Regime Strategy", layout="wide")
     
-    # Initialize session state
-    if "authenticated" not in st.session_state:
-        st.session_state.authenticated = False
-    if "username" not in st.session_state:
-        st.session_state.username = None
-    if "name" not in st.session_state:
-        st.session_state.name = None
-
-    restore_session_from_token()
+    # Get user info from session state
+    name = st.session_state.get('name', 'User')
+    username = st.session_state.get('username', 'user')
     
-    # Password reset
-    if "reset" in params:
-        st.title("Reset Password")
-        reset_user = validate_token(params["reset"])
-        if not reset_user:
-            st.error("❌ Reset link is invalid or expired.")
-            st.stop()
-        
-        with st.form("reset_password_form"):
-            st.write(f"Setting new password for user: **{reset_user}**")
-            pw1 = st.text_input("New Password", type="password", key="pw1")
-            pw2 = st.text_input("Confirm Password", type="password", key="pw2")
-            submit = st.form_submit_button("Reset Password")
-            
-            if submit:
-                if not pw1 or pw1 != pw2:
-                    st.error("Passwords do not match.")
-                elif len(pw1) < 8:
-                    st.error("Password must be at least 8 characters.")
-                else:
-                    with get_db() as conn:
-                        conn.execute(
-                            "UPDATE users SET password_hash = ? WHERE username = ?",
-                            (hash_password(pw1), reset_user)
-                        )
-                    consume_token(reset_user)
-                    st.success("✅ Password reset successfully! You may now log in.")
-                    if st.button("Go to Login"):
-                        st.query_params.clear()
-                        st.rerun()
-        st.stop()
+    # User is authenticated at this point
+    st.sidebar.title(f"Welcome {name}!")
     
-    # ============================================================
-    # AUTHENTICATION GATE
-    # ============================================================
+    authenticator.logout("Logout", "sidebar")
     
-    if not st.session_state.authenticated:
-        # Show login/signup interface
-        tab1, tab2, tab3 = st.tabs(["Login", "Sign Up", "Reset Password"])
-        
-        with tab1:
-            st.subheader("Login")
-            with st.form("login_form"):
-                username = st.text_input("Username")
-                password = st.text_input("Password", type="password")
-                submit = st.form_submit_button("Login")
-                
-                if submit:
-                    if not username or not password:
-                        st.error("Please enter username and password")
-                    else:
-                        user_data = get_user(username)
-                        if user_data:
-                            if user_data[5] == 0:  # is_active check
-                                st.error("Account is disabled. Please contact support.")
-                            elif verify_password(password, user_data[3]):
-                                update_last_login(username)
-
-                                token = create_auth_token(username)
-
-                                st.session_state.update({
-                                    "authenticated": True,
-                                    "username": username,
-                                    "name": user_data[1],
-                                    "prefs": load_user_prefs(username),
-                                    "auth_token": token
-                                })
-
-                                components.html(
-                                    f"""
-                                    <script>
-                                    localStorage.setItem("sigma_auth_token", "{token}");
-                                    </script>
-                                    """,
-                                    height=0
-                                )
-
-
-                                st.success(f"Welcome back, {user_data[1]}!")
-                                st.rerun()
-                            else:
-                                st.error("Invalid username or password")
-                        else:
-                            st.error("Invalid username or password")
-        
-        with tab2:
-            st.subheader("Create New Account")
-            with st.form("signup_form"):
-                new_username = st.text_input("Username", help="Choose a unique username")
-                new_name = st.text_input("Full Name")
-                new_email = st.text_input("Email")
-                new_pw = st.text_input("Password", type="password", 
-                                      help="At least 8 characters")
-                new_pw2 = st.text_input("Confirm Password", type="password")
-                submit = st.form_submit_button("Create Account")
-                
-                if submit:
-                    # Validation
-                    errors = []
-                    if not all([new_username, new_name, new_email, new_pw]):
-                        errors.append("All fields are required")
-                    if len(new_pw) < 8:
-                        errors.append("Password must be at least 8 characters")
-                    if new_pw != new_pw2:
-                        errors.append("Passwords do not match")
-                    if username_exists(new_username):
-                        errors.append("Username already exists")
-                    if email_exists(new_email):
-                        errors.append("Email already registered")
-                    if "@" not in new_email or "." not in new_email:
-                        errors.append("Invalid email format")
-                    
-                    if errors:
-                        for error in errors:
-                            st.error(error)
-                    else:
-                        try:
-                            create_user(new_username, new_name, new_email, new_pw)
-                            st.success("✅ Account created successfully! You can now log in.")
-
-                        except Exception as e:
-                            st.error(f"Error creating account: {str(e)}")
-        
-        with tab3:
-            st.subheader("Forgot Password")
-            with st.form("forgot_password_form"):
-                reset_email = st.text_input("Enter your email address")
-                submit = st.form_submit_button("Send Reset Link")
-                
-                if submit:
-                    with get_db() as conn:
-                        row = conn.execute(
-                            "SELECT username FROM users WHERE email = ?",
-                            (reset_email,)
-                        ).fetchone()
-                    
-                    if row:
-                        token = create_token(row[0])
-                        app_url = st.secrets.get("APP_URL", "http://localhost:8501")
-                        reset_link = f"{app_url}?reset={token}"
-                        
-                        email_sent = send_email_simple(
-                            reset_email,
-                            "Reset Your Password - Portfolio Strategy App",
-                            f"""
-                            <h3>Password Reset Request</h3>
-                            <p>You requested to reset your password. Click the link below:</p>
-                            <p><a href="{reset_link}">Reset Password</a></p>
-                            <p>This link will expire in 30 minutes.</p>
-                            <p>If you didn't request this, you can safely ignore this email.</p>
-                            """
-                        )
-                        
-                        if email_sent:
-                            st.success("Password reset link sent to your email.")
-                        else:
-                            st.error("Failed to send reset email. Please try again later.")
-                    else:
-                        st.error("No verified account found with that email.")
-        
-        st.stop()  # Stop here if not authenticated
-    
-    # ============================================================
-    # AUTHENTICATED USER INTERFACE
-    # ============================================================
-    
-    # Logout button in sidebar
-    with st.sidebar:
-        st.title(f"Welcome {st.session_state.name}!")
-        if st.button("🚪 Logout", type="primary", use_container_width=True):
-            if "auth_token" in st.session_state:
-                revoke_auth_token(st.session_state.auth_token)
-
-            components.html(
-                """
-                <script>
-                localStorage.removeItem("sigma_auth_token");
-                </script>
-                """,
-                height=0
-            )
-
-
-            for key in list(st.session_state.keys()):
-                del st.session_state[key]
-
-            st.rerun()
-    
-    # Main app content
     show_strategy_overview()
     st.markdown("---")
     
-    # Load user preferences
-    if "prefs" not in st.session_state:
-        st.session_state.prefs = load_user_prefs(st.session_state.username)
+    # --- SIDEBAR INPUTS ---
+    st.sidebar.header("Strategy Settings")
     
+    # Load saved prefs
     prefs = st.session_state.prefs
     
-    # Strategy settings in sidebar
-    st.sidebar.header("⚙️ Strategy Settings")
+    # Input fields with saved values
+    start = st.sidebar.text_input("Start Date", prefs["start_date"])
+    risk_on_tickers_str = st.sidebar.text_input("Risk On Tickers", prefs["risk_on_tickers"])
+    risk_on_weights_str = st.sidebar.text_input("Risk On Weights", prefs["risk_on_weights"])
+    risk_off_tickers_str = st.sidebar.text_input("Risk Off Tickers", prefs["risk_off_tickers"])
+    risk_off_weights_str = st.sidebar.text_input("Risk Off Weights", prefs["risk_off_weights"])
+    annual_drag = st.sidebar.number_input("Annual Drag %", value=float(prefs["annual_drag_pct"]))
+    qs_cap_1 = st.sidebar.number_input("Portfolio Value at Last Rebalance", value=float(prefs["qs_cap_1"]))
+    real_cap_1 = st.sidebar.number_input("Portfolio Value Today", value=float(prefs["real_cap_1"]))
+    inception_date = st.sidebar.text_input("Inception Date", prefs["official_inception_date"])
+    benchmark = st.sidebar.text_input("Benchmark", prefs["benchmark_ticker"])
+    min_days = st.sidebar.number_input("Confirmation Days", value=int(prefs["min_holding_days"]))
     
-    with st.sidebar.expander("Portfolio Configuration", expanded=True):
-        start = st.text_input("Start Date", prefs["start_date"])
-        risk_on_tickers_str = st.text_input("Risk On Tickers", prefs["risk_on_tickers"])
-        risk_on_weights_str = st.text_input("Risk On Weights", prefs["risk_on_weights"])
-        risk_off_tickers_str = st.text_input("Risk Off Tickers", prefs["risk_off_tickers"])
-        risk_off_weights_str = st.text_input("Risk Off Weights", prefs["risk_off_weights"])
-        annual_drag = st.number_input("Annual Drag %", value=float(prefs["annual_drag_pct"]))
-    
-    with st.sidebar.expander("Portfolio Values", expanded=True):
-        qs_cap_1 = st.number_input("Portfolio Value at Last Rebalance", value=float(prefs["qs_cap_1"]))
-        real_cap_1 = st.number_input("Portfolio Value Today", value=float(prefs["real_cap_1"]))
-    
-    with st.sidebar.expander("Advanced Settings", expanded=False):
-        inception_date = st.text_input("Inception Date", prefs["official_inception_date"])
-        benchmark = st.text_input("Benchmark", prefs["benchmark_ticker"])
-        min_days = st.number_input("Confirmation Days", value=int(prefs["min_holding_days"]), min_value=1)
-    
-    # Save settings button
-    if st.sidebar.button("💾 Save Settings", type="secondary", use_container_width=True):
+    # Save button
+    if st.sidebar.button("💾 Save Settings", type="primary"):
         st.session_state.prefs = {
             "start_date": start,
             "risk_on_tickers": risk_on_tickers_str,
@@ -1231,345 +994,574 @@ def main():
             "benchmark_ticker": benchmark,
             "min_holding_days": min_days,
         }
-        save_user_prefs(st.session_state.username, st.session_state.prefs)
-        st.sidebar.success("Settings saved!")
+        save_user_prefs(username, st.session_state.prefs)
+        st.sidebar.success("Settings saved permanently")
     
-    # Run analysis button
-    run_clicked = st.sidebar.button("🚀 Run Analysis", type="primary", use_container_width=True)
+    run_clicked = st.sidebar.button("🚀 Run Analysis", type="secondary")
     
     if not run_clicked:
-        st.info("Adjust settings in sidebar and click 'Run Analysis' to begin.")
+        st.info("Adjust settings in sidebar and click 'Run Analysis'")
         st.stop()
     
-    # ============================================================
-    # TRADING STRATEGY EXECUTION (From your original code)
-    # ============================================================
-    
     # Process inputs
-    try:
-        risk_on_tickers = [t.strip().upper() for t in risk_on_tickers_str.split(",")]
-        risk_on_weights_list = [float(x) for x in risk_on_weights_str.split(",")]
-        risk_on_weights = dict(zip(risk_on_tickers, risk_on_weights_list))
+    risk_on_tickers = [t.strip().upper() for t in risk_on_tickers_str.split(",")]
+    risk_on_weights_list = [float(x) for x in risk_on_weights_str.split(",")]
+    risk_on_weights = dict(zip(risk_on_tickers, risk_on_weights_list))
+    
+    risk_off_tickers = [t.strip().upper() for t in risk_off_tickers_str.split(",")]
+    risk_off_weights_list = [float(x) for x in risk_off_weights_str.split(",")]
+    risk_off_weights = dict(zip(risk_off_tickers, risk_off_weights_list))
+    
+    annual_drag_decimal = annual_drag / 100.0
+    
+    all_tickers = sorted(set(risk_on_tickers + risk_off_tickers))
+    end_val = ""
+    prices = load_price_data(all_tickers, start, end_val if end_val else None).dropna(how="any")
+    
+    if len(prices) == 0:
+        st.error("No data loaded. Please check your ticker symbols and date range.")
+        st.stop()
+    
+    st.info(f"Loaded {len(prices)} trading days of data from {prices.index[0].date()} to {prices.index[-1].date()} for backtesting")
+    
+    # MA is always 200-day SMA
+    best_len = 200
+    best_type = "sma"
+    
+    portfolio_index = build_portfolio_index(prices, risk_on_weights, annual_drag_pct=annual_drag_decimal)
+    opt_ma = compute_ma(portfolio_index, best_len, best_type)
+    
+    tolerance_decimal = 0.0
+    tol_series = pd.Series(tolerance_decimal, index=portfolio_index.index)
+    
+    if annual_drag > 0:
+        daily_drag_factor = (1 - annual_drag_decimal) ** (1/252)
+        daily_drag_pct = (1 - daily_drag_factor) * 100
+        st.write(f"**Portfolio Drag:** {annual_drag:.1f}% annual (≈{daily_drag_pct:.4f}% daily)")
+    
+    sig = generate_testfol_signal_vectorized(
+        portfolio_index,
+        opt_ma,
+        tol_series,
+        min_holding_days=min_days
+    )
+    
+    best_result = backtest(prices, sig, risk_on_weights, risk_off_weights, FLIP_COST, 
+                          ma_flip_multiplier=3.0, annual_drag_pct=annual_drag_decimal)
+    
+    latest_signal = sig.iloc[-1]
+    current_regime = "Risk On" if latest_signal else "Risk Off"
+    st.subheader(f"Current 200 Day SMA Regime: {current_regime}")
+    
+    perf = best_result["performance"]
+    switches = sig.astype(int).diff().abs().sum()
+    trades_per_year = switches / (len(sig) / 252) if len(sig) > 0 else 0
+    
+    simple_rets = prices.pct_change().fillna(0)
+    risk_on_simple = pd.Series(0.0, index=simple_rets.index)
+    for a, w in risk_on_weights.items():
+        if a in simple_rets.columns:
+            risk_on_simple += simple_rets[a] * w
+    
+    if annual_drag_decimal > 0:
+        daily_drag_factor = (1 - annual_drag_decimal) ** (1/252)
+        risk_on_simple = (1 + risk_on_simple) * daily_drag_factor - 1
+    
+    risk_on_eq = (1 + risk_on_simple).cumprod()
+    risk_on_perf = compute_enhanced_performance(risk_on_simple, risk_on_eq)
+    
+    # Calendar quarter logic
+    dates = prices.index
+    true_q_ends = pd.date_range(start=dates.min(), end=dates.max(), freq='Q')
+    mapped_q_ends = []
+    for qd in true_q_ends:
+        valid_dates = dates[dates <= qd]
+        if len(valid_dates) > 0:
+            mapped_q_ends.append(valid_dates.max())
+    
+    mapped_q_ends = pd.to_datetime(mapped_q_ends)
+    
+    today_date = pd.Timestamp.today().normalize()
+    true_next_q = pd.date_range(start=today_date, periods=2, freq="Q")[0]
+    next_q_end = true_next_q
+    days_to_next_q = (next_q_end - today_date).days
+    
+    if len(risk_on_eq) > 0 and risk_on_eq.iloc[0] != 0:
+        bh_cagr = (risk_on_eq.iloc[-1] / risk_on_eq.iloc[0]) ** (252 / len(risk_on_eq)) - 1
+        quarterly_target = (1 + bh_cagr) ** (1/4) - 1
+    else:
+        bh_cagr = 0
+        quarterly_target = 0
+    
+    risk_off_daily = pd.Series(0.0, index=simple_rets.index)
+    for a, w in risk_off_weights.items():
+        if a in simple_rets.columns:
+            risk_off_daily += simple_rets[a] * w
+    
+    pure_sig_signal = pd.Series(True, index=risk_on_simple.index)
+    
+    pure_sig_eq, pure_sig_rw, pure_sig_sw, pure_sig_rebals = run_sig_engine(
+        risk_on_simple,
+        risk_off_daily,
+        quarterly_target,
+        pure_sig_signal,
+        quarter_end_dates=mapped_q_ends,
+        quarterly_multiplier=2.0,
+        ma_flip_multiplier=0.0
+    )
+    
+    hybrid_eq, hybrid_rw, hybrid_sw, hybrid_rebals = run_sig_engine(
+        risk_on_simple,
+        risk_off_daily,
+        quarterly_target,
+        sig,
+        pure_sig_rw=pure_sig_rw,
+        pure_sig_sw=pure_sig_sw,
+        quarter_end_dates=mapped_q_ends,
+        quarterly_multiplier=2.0,
+        ma_flip_multiplier=3.0
+    )
+    
+    hybrid_simple = hybrid_eq.pct_change().fillna(0)
+    hybrid_perf = compute_enhanced_performance(hybrid_simple, hybrid_eq)
+    
+    # Since-inception analysis
+    inception = pd.to_datetime(inception_date)
+    sigma_eq_si = hybrid_eq.loc[hybrid_eq.index >= inception]
+    sigma_ret_si = sigma_eq_si.pct_change().fillna(0)
+    
+    bh_eq_si = risk_on_eq.loc[risk_on_eq.index >= inception]
+    bh_ret_si = bh_eq_si.pct_change().fillna(0)
+    
+    benchmark_px = load_price_data([benchmark], inception)
+    if not benchmark_px.empty and benchmark in benchmark_px.columns:
+        benchmark_eq_si = (benchmark_px[benchmark] / benchmark_px[benchmark].iloc[0]).reindex(sigma_eq_si.index).ffill()
+        benchmark_ret_si = benchmark_eq_si.pct_change().fillna(0)
+    else:
+        benchmark_eq_si = pd.Series(1.0, index=sigma_eq_si.index)
+        benchmark_ret_si = pd.Series(0.0, index=sigma_eq_si.index)
+        st.warning(f"Could not load benchmark data for {benchmark}")
+    
+    st.subheader(f"Your Performance (Sigma vs Buy & Hold vs {benchmark})")
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.plot(sigma_eq_si / sigma_eq_si.iloc[0], label="Sigma", linewidth=2, color="blue")
+    ax.plot(bh_eq_si / bh_eq_si.iloc[0], label="Buy & Hold", linewidth=2, alpha=0.7)
+    ax.plot(benchmark_eq_si, label=benchmark, linewidth=2, linestyle="--", color="black", alpha=0.7)
+    ax.set_ylabel("Growth of $1")
+    ax.set_title(f"Performance Since {inception_date}")
+    ax.legend()
+    ax.grid(alpha=0.3)
+    st.pyplot(fig)
+    
+    sigma_perf_si = compute_enhanced_performance(sigma_ret_si, sigma_eq_si)
+    bh_perf_si = compute_enhanced_performance(bh_ret_si, bh_eq_si)
+    benchmark_perf_si = compute_enhanced_performance(benchmark_ret_si, benchmark_eq_si)
+    
+    def fmt(val, kind):
+        if pd.isna(val):
+            return "—"
+        if kind == "pct":
+            return f"{val:.2%}"
+        return f"{val:.3f}"
+    
+    rows = [
+        ("CAGR", "CAGR", "pct"),
+        ("Volatility", "Volatility", "pct"),
+        ("Sharpe", "Sharpe", "dec"),
+        ("Sortino", "Sortino", "dec"),
+        ("Max Drawdown", "MaxDrawdown", "pct"),
+        ("Total Return", "TotalReturn", "pct"),
+    ]
+    
+    table_data = []
+    for label, key, kind in rows:
+        table_data.append([
+            label,
+            fmt(sigma_perf_si[key], kind),
+            fmt(bh_perf_si[key], kind),
+            fmt(benchmark_perf_si[key], kind),
+        ])
+    
+    si_table = pd.DataFrame(table_data, columns=["Metric", "Sigma", "Buy & Hold", benchmark])
+    st.dataframe(si_table, use_container_width=True)
+    
+    perf = hybrid_perf
+    
+    if len(hybrid_rebals) > 0:
+        reb_df = pd.DataFrame({"Rebalance Date": pd.to_datetime(hybrid_rebals)})
+        st.subheader("Sigma System – Historical Rebalance Dates")
+        st.dataframe(reb_df)
+    else:
+        st.subheader("Sigma – Historical Rebalance Dates")
+        st.write("No Sigma rebalances occurred during the backtest.")
+    
+    if len(hybrid_rebals) > 0:
+        quarter_start_date = hybrid_rebals[-1]
+    else:
+        quarter_start_date = dates[0] if len(dates) > 0 else None
+    
+    st.subheader("Strategy Implementation Summary")
+    if len(hybrid_rebals) > 0:
+        last_reb = hybrid_rebals[-1]
+        st.write(f"**Last Rebalance:** {last_reb.strftime('%Y-%m-%d')}")
+    else:
+        st.write("**Quarter start (last SIG rebalance):** None yet")
+    st.write(f"**Next Rebalance:** {next_q_end.date()} ({days_to_next_q} days)")
+    
+    def get_sig_progress(qs_cap, today_cap):
+        if quarter_start_date is not None and len(hybrid_rw) > 0:
+            risky_start = qs_cap * float(hybrid_rw.loc[quarter_start_date])
+            risky_today = today_cap * float(hybrid_rw.iloc[-1])
+            return compute_quarter_progress(risky_start, risky_today, quarterly_target)
+        else:
+            return compute_quarter_progress(0, 0, 0)
+    
+    prog_1 = get_sig_progress(qs_cap_1, real_cap_1)
+    st.write(f"**Quarterly Target Growth Rate:** {quarterly_target:.2%}")
+    
+    prog_df = pd.DataFrame.from_dict(prog_1, orient='index', columns=['Portfolio'])
+    prog_df.loc["Gap (%)"] = prog_df.loc["Gap (%)"].apply(lambda x: f"{x:.2%}")
+    st.dataframe(prog_df)
+    
+    st.markdown("### Rebalance Recommendations")
+    gap = prog_1['Gap ($)']
+    date_str = next_q_end.strftime("%m/%d/%Y")
+    days_str = f"{days_to_next_q} days"
+    dollar_amount = f"${abs(gap):,.2f}"
+    
+    if gap > 0:
+        message = f"**Portfolio:** **Sell {dollar_amount}** of the Risk Off Allocation and **Buy {dollar_amount}** of the Risk On Allocation on **{date_str}** ({days_str})"
+    elif gap < 0:
+        message = f"**Portfolio:** **Sell {dollar_amount}** of the Risk On Allocation and **Buy {dollar_amount}** of Risk Off Allocation on **{date_str}** ({days_str})"
+    else:
+        message = f"**Portfolio:** No rebalance needed until **{date_str}** ({days_str})"
+    
+    st.markdown(message)
+    
+    # Performance metrics
+    def time_in_drawdown(dd): return (dd < 0).mean() if len(dd) > 0 else 0
+    def mar(c, dd): return c / abs(dd) if dd != 0 else 0
+    def ulcer(dd): return np.sqrt((dd**2).mean()) if len(dd) > 0 and (dd**2).mean() != 0 else 0
+    def pain_gain(c, dd): return c / ulcer(dd) if ulcer(dd) != 0 else 0
+    
+    def compute_stats(perf, returns, dd, flips, tpy):
+        return {
+            "CAGR": perf["CAGR"],
+            "Volatility": perf["Volatility"],
+            "Sharpe": perf["Sharpe"],
+            "Sortino": perf["Sortino"],
+            "Calmar": perf["Calmar"],
+            "Omega": perf["Omega"],
+            "MaxDD": perf["MaxDrawdown"],
+            "Total": perf["TotalReturn"],
+            "WinRate": perf["WinRate"],
+            "ProfitFactor": perf["ProfitFactor"],
+            "VaR_95": perf["VaR_95"],
+            "CVaR_95": perf["CVaR_95"],
+            "MAR": mar(perf["CAGR"], perf["MaxDrawdown"]),
+            "TID": time_in_drawdown(dd),
+            "PainGain": pain_gain(perf["CAGR"], dd),
+            "UlcerIndex": perf["UlcerIndex"],
+            "RecoveryFactor": perf["RecoveryFactor"],
+            "TailRatio": perf["TailRatio"],
+            "Skew": perf["Skewness"],
+            "Kurtosis": perf["Kurtosis"],
+            "Trades/year": tpy,
+        }
+    
+    hybrid_simple = hybrid_eq.pct_change().fillna(0) if len(hybrid_eq) > 0 else pd.Series([], dtype=float)
+    hybrid_perf = compute_enhanced_performance(hybrid_simple, hybrid_eq)
+    
+    pure_sig_simple = pure_sig_eq.pct_change().fillna(0) if len(pure_sig_eq) > 0 else pd.Series([], dtype=float)
+    pure_sig_perf = compute_enhanced_performance(pure_sig_simple, pure_sig_eq)
+    
+    ma_perf = best_result["performance"]
+    
+    strat_stats = compute_stats(ma_perf, best_result["returns"], ma_perf["DD_Series"], best_result["flip_mask"], trades_per_year)
+    risk_stats = compute_stats(risk_on_perf, risk_on_simple, risk_on_perf["DD_Series"], np.zeros(len(risk_on_simple), dtype=bool) if len(risk_on_simple) > 0 else np.array([], dtype=bool), 0)
+    hybrid_stats = compute_stats(hybrid_perf, hybrid_simple, hybrid_perf["DD_Series"], np.zeros(len(hybrid_simple), dtype=bool) if len(hybrid_simple) > 0 else np.array([], dtype=bool), 0)
+    pure_sig_stats = compute_stats(pure_sig_perf, pure_sig_simple, pure_sig_perf["DD_Series"], np.zeros(len(pure_sig_simple), dtype=bool) if len(pure_sig_simple) > 0 else np.array([], dtype=bool), 0)
+    
+    st.subheader("Backtest: All Strategies Performance Statistics")
+    rows = [
+        ("CAGR", "CAGR"),
+        ("Volatility", "Volatility"),
+        ("Sharpe Ratio", "Sharpe"),
+        ("Sortino Ratio", "Sortino"),
+        ("Calmar Ratio", "Calmar"),
+        ("Omega Ratio", "Omega"),
+        ("Max Drawdown", "MaxDD"),
+        ("Total Return", "Total"),
+        ("Win Rate", "WinRate"),
+        ("Profit Factor", "ProfitFactor"),
+        ("VaR (95%)", "VaR_95"),
+        ("CVaR (95%)", "CVaR_95"),
+        ("MAR Ratio", "MAR"),
+        ("Time in Drawdown (%)", "TID"),
+        ("Pain-to-Gain", "PainGain"),
+        ("Ulcer Index", "UlcerIndex"),
+        ("Recovery Factor", "RecoveryFactor"),
+        ("Tail Ratio", "TailRatio"),
+        ("Skewness", "Skew"),
+        ("Kurtosis", "Kurtosis"),
+        ("Trades per year", "Trades/year"),
+    ]
+    
+    def fmt_pct(x): return f"{x:.2%}" if pd.notna(x) else "—"
+    def fmt_dec(x): return f"{x:.3f}" if pd.notna(x) else "—"
+    def fmt_num(x): return f"{x:,.2f}" if pd.notna(x) else "—"
+    
+    table_data = []
+    for label, key in rows:
+        sv = strat_stats.get(key, np.nan)
+        rv = risk_stats.get(key, np.nan)
+        hv = hybrid_stats.get(key, np.nan)
+        ps = pure_sig_stats.get(key, np.nan)
         
-        risk_off_tickers = [t.strip().upper() for t in risk_off_tickers_str.split(",")]
-        risk_off_weights_list = [float(x) for x in risk_off_weights_str.split(",")]
-        risk_off_weights = dict(zip(risk_off_tickers, risk_off_weights_list))
+        if key in ["CAGR", "Volatility", "MaxDD", "Total", "WinRate", "VaR_95", "CVaR_95", "TID"]:
+            row = [label, fmt_pct(sv), fmt_pct(rv), fmt_pct(hv), fmt_pct(ps)]
+        elif key in ["Sharpe", "Sortino", "Calmar", "Omega", "ProfitFactor", "Skew", "Kurtosis", "UlcerIndex", "RecoveryFactor", "TailRatio", "PainGain", "MAR"]:
+            row = [label, fmt_dec(sv), fmt_dec(rv), fmt_dec(hv), fmt_dec(ps)]
+        else:
+            row = [label, fmt_num(sv), fmt_num(rv), fmt_num(hv), fmt_num(ps)]
         
-        annual_drag_decimal = annual_drag / 100.0
+        table_data.append(row)
+    
+    stat_table = pd.DataFrame(table_data, columns=["Metric", "MA", "Buy & Hold", "Sigma", "SIG"])
+    st.dataframe(stat_table, use_container_width=True)
+    
+    # Allocation tables
+    def compute_allocations(account_value, risky_w, safe_w, ron_w, roff_w):
+        risky_dollars = account_value * risky_w
+        safe_dollars = account_value * safe_w
+        alloc = {"Total Risky $": risky_dollars, "Total Safe $": safe_dollars}
+        for t, w in ron_w.items():
+            alloc[t] = risky_dollars * w
+        for t, w in roff_w.items():
+            alloc[t] = safe_dollars * w
+        return alloc
+    
+    def add_pct(df_dict):
+        out = pd.DataFrame.from_dict(df_dict, orient="index", columns=["$"])
+        if "Total Risky $" in out.index and "Total Safe $" in out.index:
+            total_portfolio = float(out.loc["Total Risky $","$"]) + float(out.loc["Total Safe $","$"])
+            out["% Portfolio"] = (out["$"] / total_portfolio * 100).apply(lambda x: f"{x:.2f}%")
+            return out
+        total = out["$"].sum()
+        out["% Portfolio"] = (out["$"] / total * 100).apply(lambda x: f"{x:.2f}%")
+        return out
+    
+    st.subheader("Portfolio Allocations")
+    hyb_r = float(hybrid_rw.iloc[-1]) if len(hybrid_rw) > 0 else 0
+    hyb_s = float(hybrid_sw.iloc[-1]) if len(hybrid_sw) > 0 else 0
+    pure_r = float(pure_sig_rw.iloc[-1]) if len(pure_sig_rw) > 0 else 0
+    pure_s = float(pure_sig_sw.iloc[-1]) if len(pure_sig_sw) > 0 else 0
+    latest_signal = sig.iloc[-1] if len(sig) > 0 else False
+    
+    tab1, tab2, tab3 = st.tabs(["Sigma", "SIG", "200 Day SMA"])
+    with tab1:
+        st.write("### Portfolio — Sigma")
+        st.dataframe(add_pct(compute_allocations(real_cap_1, hyb_r, hyb_s, risk_on_weights, risk_off_weights)))
+    with tab2:
+        st.write("### Portfolio — SIG")
+        st.dataframe(add_pct(compute_allocations(real_cap_1, pure_r, pure_s, risk_on_weights, risk_off_weights)))
+    with tab3:
+        st.write("### Portfolio — 200 Day SMA")
+        if latest_signal:
+            ma_alloc = compute_allocations(real_cap_1, 1.0, 0.0, risk_on_weights, {"SHY": 0})
+        else:
+            ma_alloc = compute_allocations(real_cap_1, 0.0, 1.0, {}, risk_off_weights)
+        st.dataframe(add_pct(ma_alloc))
+    
+    # MA distance
+    st.subheader("Next 200 Day SMA Crossover Distance")
+    if len(opt_ma) > 0 and len(portfolio_index) > 0:
+        latest_date = opt_ma.dropna().index[-1]
+        P = float(portfolio_index.loc[latest_date])
+        MA = float(opt_ma.loc[latest_date])
+        upper = MA * (1 + tolerance_decimal)
+        lower = MA * (1 - tolerance_decimal)
         
-        all_tickers = sorted(set(risk_on_tickers + risk_off_tickers))
-        prices = load_price_data_cached(all_tickers, start)
+        if latest_signal:
+            delta = (P - lower) / P
+            st.write(f"**Drop Required for Crossover:** {delta:.2%}")
+        else:
+            delta = (upper - P) / P
+            st.write(f"**Gain Required for Crossover:** {delta:.2%}")
+    else:
+        st.write("**Insufficient data for MA distance calculation**")
+    
+    # Regime stats
+    st.subheader("200 Day SMA Crossover Statistics")
+    if len(sig) > 0:
+        sig_int = sig.astype(int)
+        flips = sig_int.diff().fillna(0).ne(0)
+        segments = []
+        current = sig_int.iloc[0]
+        seg_start = sig_int.index[0]
         
-        if len(prices) == 0:
-            st.error("No data loaded. Please check your ticker symbols and date range.")
-            st.stop()
+        for date, sw in flips.iloc[1:].items():
+            if sw:
+                segments.append((current, seg_start, date))
+                current = sig_int.loc[date]
+                seg_start = date
         
-        # Show loading progress
-        with st.spinner("Running analysis..."):
-            
-            # MA setup
-            best_len = 200
-            best_type = "sma"
-            
-            portfolio_index = build_portfolio_index(prices, risk_on_weights, annual_drag_pct=annual_drag_decimal)
-            opt_ma = compute_ma(portfolio_index, best_len, best_type)
-            
-            tolerance_decimal = 0.0
-            tol_series = pd.Series(tolerance_decimal, index=portfolio_index.index)
-            
-            sig = generate_testfol_signal_vectorized(
-                portfolio_index,
-                opt_ma,
-                tol_series,
-                min_holding_days=min_days
-            )
-            
-            # Run backtests
-            best_result = backtest(prices, sig, risk_on_weights, risk_off_weights, FLIP_COST, 
-                                  ma_flip_multiplier=3.0, annual_drag_pct=annual_drag_decimal)
-            
-            latest_signal = sig.iloc[-1]
-            current_regime = "Risk On" if latest_signal else "Risk Off"
-            
-            # Get returns data
-            simple_rets = prices.pct_change().fillna(0)
-            risk_on_simple = pd.Series(0.0, index=simple_rets.index)
-            for a, w in risk_on_weights.items():
-                if a in simple_rets.columns:
-                    risk_on_simple += simple_rets[a] * w
-            
-            if annual_drag_decimal > 0:
-                daily_drag_factor = (1 - annual_drag_decimal) ** (1/252)
-                risk_on_simple = (1 + risk_on_simple) * daily_drag_factor - 1
-            
-            risk_on_eq = (1 + risk_on_simple).cumprod()
-            
-            # Calendar quarter logic
-            dates = prices.index
-            true_q_ends = pd.date_range(start=dates.min(), end=dates.max(), freq='Q')
-            mapped_q_ends = []
-            for qd in true_q_ends:
-                valid_dates = dates[dates <= qd]
-                if len(valid_dates) > 0:
-                    mapped_q_ends.append(valid_dates.max())
-            
-            mapped_q_ends = pd.to_datetime(mapped_q_ends)
-            
-            today_date = pd.Timestamp.today().normalize()
-            true_next_q = pd.date_range(start=today_date, periods=2, freq="Q")[0]
-            next_q_end = true_next_q
-            days_to_next_q = (next_q_end - today_date).days
-            
-            if len(risk_on_eq) > 0 and risk_on_eq.iloc[0] != 0:
-                bh_cagr = (risk_on_eq.iloc[-1] / risk_on_eq.iloc[0]) ** (252 / len(risk_on_eq)) - 1
-                quarterly_target = (1 + bh_cagr) ** (1/4) - 1
-            else:
-                bh_cagr = 0
-                quarterly_target = 0
-            
-            risk_off_daily = pd.Series(0.0, index=simple_rets.index)
-            for a, w in risk_off_weights.items():
-                if a in simple_rets.columns:
-                    risk_off_daily += simple_rets[a] * w
-            
-            pure_sig_signal = pd.Series(True, index=risk_on_simple.index)
-            
-            pure_sig_eq, pure_sig_rw, pure_sig_sw, pure_sig_rebals = run_sig_engine(
-                risk_on_simple,
-                risk_off_daily,
-                quarterly_target,
-                pure_sig_signal,
-                quarter_end_dates=mapped_q_ends,
-                quarterly_multiplier=2.0,
-                ma_flip_multiplier=0.0
-            )
-            
-            hybrid_eq, hybrid_rw, hybrid_sw, hybrid_rebals = run_sig_engine(
-                risk_on_simple,
-                risk_off_daily,
-                quarterly_target,
-                sig,
-                pure_sig_rw=pure_sig_rw,
-                pure_sig_sw=pure_sig_sw,
-                quarter_end_dates=mapped_q_ends,
-                quarterly_multiplier=2.0,
-                ma_flip_multiplier=3.0
-            )
-            
-            hybrid_simple = hybrid_eq.pct_change().fillna(0)
-            
-            # Since-inception analysis
-            inception = pd.to_datetime(inception_date)
-            sigma_eq_si = hybrid_eq.loc[hybrid_eq.index >= inception]
-            sigma_ret_si = sigma_eq_si.pct_change().fillna(0)
-            
-            bh_eq_si = risk_on_eq.loc[risk_on_eq.index >= inception]
-            bh_ret_si = bh_eq_si.pct_change().fillna(0)
-            
-            benchmark_px = load_price_data([benchmark], inception)
-            if not benchmark_px.empty and benchmark in benchmark_px.columns:
-                benchmark_eq_si = (benchmark_px[benchmark] / benchmark_px[benchmark].iloc[0]).reindex(sigma_eq_si.index).ffill()
-                benchmark_ret_si = benchmark_eq_si.pct_change().fillna(0)
-            else:
-                benchmark_eq_si = pd.Series(1.0, index=sigma_eq_si.index)
-                benchmark_ret_si = pd.Series(0.0, index=sigma_eq_si.index)
+        segments.append((current, seg_start, sig_int.index[-1]))
+        regime_rows = []
+        for r, s, e in segments:
+            regime_rows.append(["Risk On" if r == 1 else "Risk Off", s.date(), e.date(), (e - s).days])
         
-        # ============================================================
-        # DISPLAY RESULTS
-        # ============================================================
+        regime_df = pd.DataFrame(regime_rows, columns=["Regime", "Start", "End", "Duration (days)"])
+        st.dataframe(regime_df)
         
-        st.success(f"✅ Analysis complete! Data loaded from {prices.index[0].date()} to {prices.index[-1].date()}")
-        
-        # Current regime
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Current 200-Day SMA Regime", current_regime)
-        with col2:
-            st.metric("Portfolio Value Today", f"${real_cap_1:,.2f}")
-        with col3:
-            st.metric("Quarterly Target", f"{quarterly_target:.2%}")
-        
-        # Performance comparison
-        st.subheader(f"Performance (Sigma vs Buy & Hold vs {benchmark})")
+        on_durations = regime_df[regime_df['Regime']=='Risk On']['Duration (days)']
+        off_durations = regime_df[regime_df['Regime']=='Risk Off']['Duration (days)']
+        st.write(f"**Average Risk On duration:** {on_durations.mean():.1f} days" if len(on_durations) > 0 else "**Avg Risk On duration:** 0 days")
+        st.write(f"**Average Risk Off duration:** {off_durations.mean():.1f} days" if len(off_durations) > 0 else "**Avg Risk Off duration:** 0 days")
+    else:
+        st.write("No 200 Day SMA Crossover data available")
+    
+    st.markdown("---")
+    
+    # Final performance plot
+    st.subheader("All Strategy Performance Visual")
+    plot_index = build_portfolio_index(prices, risk_on_weights, annual_drag_pct=annual_drag_decimal)
+    plot_ma = compute_ma(plot_index, best_len, best_type)
+    plot_index_norm = normalize(plot_index)
+    plot_ma_norm = normalize(plot_ma.dropna()) if len(plot_ma.dropna()) > 0 else pd.Series([], dtype=float)
+    strat_eq_norm = normalize(best_result["equity_curve"])
+    hybrid_eq_norm = normalize(hybrid_eq) if len(hybrid_eq) > 0 else pd.Series([], dtype=float)
+    pure_sig_norm = normalize(pure_sig_eq) if len(pure_sig_eq) > 0 else pd.Series([], dtype=float)
+    risk_on_norm = normalize(risk_on_eq) if len(risk_on_eq) > 0 else pd.Series([], dtype=float)
+    
+    if len(strat_eq_norm) > 0:
         fig, ax = plt.subplots(figsize=(12, 6))
-        ax.plot(sigma_eq_si / sigma_eq_si.iloc[0], label="Sigma", linewidth=2, color="blue")
-        ax.plot(bh_eq_si / bh_eq_si.iloc[0], label="Buy & Hold", linewidth=2, alpha=0.7)
-        ax.plot(benchmark_eq_si, label=benchmark, linewidth=2, linestyle="--", color="black", alpha=0.7)
-        ax.set_ylabel("Growth of $1")
-        ax.set_title(f"Performance Since {inception_date}")
+        ax.plot(strat_eq_norm, label="MA", linewidth=2)
+        if len(risk_on_norm) > 0:
+            ax.plot(risk_on_norm, label="Buy & Hold", alpha=0.65)
+        if len(hybrid_eq_norm) > 0:
+            ax.plot(hybrid_eq_norm, label="Sigma", linewidth=2, color="blue")
+        if len(pure_sig_norm) > 0:
+            ax.plot(pure_sig_norm, label="SIG", linewidth=2, color="orange")
+        if len(plot_ma_norm) > 0:
+            ax.plot(plot_ma_norm, label="200-day SMA", linestyle="--", color="black", alpha=0.6)
+        
         ax.legend()
         ax.grid(alpha=0.3)
         st.pyplot(fig)
-        
-        # Performance metrics
-        sigma_perf_si = compute_enhanced_performance(sigma_ret_si, sigma_eq_si)
-        bh_perf_si = compute_enhanced_performance(bh_ret_si, bh_eq_si)
-        benchmark_perf_si = compute_enhanced_performance(benchmark_ret_si, benchmark_eq_si)
-        
-        def fmt(val, kind):
-            if pd.isna(val):
-                return "—"
-            if kind == "pct":
-                return f"{val:.2%}"
-            return f"{val:.3f}"
-        
-        metrics_data = []
-        metrics = [
-            ("CAGR", "CAGR", "pct"),
-            ("Volatility", "Volatility", "pct"),
-            ("Sharpe", "Sharpe", "dec"),
-            ("Sortino", "Sortino", "dec"),
-            ("Max Drawdown", "MaxDrawdown", "pct"),
-            ("Total Return", "TotalReturn", "pct"),
-        ]
-        
-        for label, key, kind in metrics:
-            metrics_data.append([
-                label,
-                fmt(sigma_perf_si[key], kind),
-                fmt(bh_perf_si[key], kind),
-                fmt(benchmark_perf_si[key], kind),
-            ])
-        
-        metrics_df = pd.DataFrame(metrics_data, columns=["Metric", "Sigma", "Buy & Hold", benchmark])
-        st.dataframe(metrics_df, use_container_width=True)
-        
-        # Rebalance recommendations
-        st.subheader("📊 Rebalance Recommendations")
-        
-        if len(hybrid_rebals) > 0:
-            quarter_start_date = hybrid_rebals[-1]
-            risky_start = qs_cap_1 * float(hybrid_rw.loc[quarter_start_date])
-            risky_today = real_cap_1 * float(hybrid_rw.iloc[-1])
-            progress = compute_quarter_progress(risky_start, risky_today, quarterly_target)
-            
-            gap = progress['Gap ($)']
-            date_str = next_q_end.strftime("%m/%d/%Y")
-            days_str = f"{days_to_next_q} days"
-            dollar_amount = f"${abs(gap):,.2f}"
-            
-            if gap > 0:
-                st.warning(f"**Action Needed:** Sell {dollar_amount} of Risk Off and Buy {dollar_amount} of Risk On")
-                st.info(f"**Next Rebalance:** {date_str} ({days_str})")
-            elif gap < 0:
-                st.warning(f"**Action Needed:** Sell {dollar_amount} of Risk On and Buy {dollar_amount} of Risk Off")
-                st.info(f"**Next Rebalance:** {date_str} ({days_str})")
+    else:
+        st.info("Insufficient data for performance plot")
+    
+    # Strategy diagnostics
+    st.subheader("Sigma System Diagnostics")
+    diag_fig = plot_diagnostics(hybrid_eq=hybrid_eq, bh_eq=risk_on_eq, hybrid_signal=sig)
+    st.pyplot(diag_fig)
+    
+    # Monte Carlo
+    st.subheader("Monte Carlo Stress Testing - Next 12-Month Simulation")
+    total_current_portfolio = real_cap_1
+    strategies_mc = {
+        "MA Strategy": {"returns": best_result["returns"], "equity": best_result["equity_curve"], "initial_capital": total_current_portfolio},
+        "Buy & Hold": {"returns": risk_on_simple, "equity": risk_on_eq, "initial_capital": total_current_portfolio},
+        "Sigma": {"returns": hybrid_simple, "equity": hybrid_eq, "initial_capital": total_current_portfolio},
+        "SIG": {"returns": pure_sig_simple, "equity": pure_sig_eq, "initial_capital": total_current_portfolio}
+    }
+    
+    mc_results = {}
+    with st.spinner("Running Monte Carlo simulations (100,000 paths each)..."):
+        for name, data in strategies_mc.items():
+            if len(data["returns"]) > 100:
+                mc_results[name] = monte_carlo_strategy_analysis(
+                    data["returns"], data["equity"], n_sim=10000, periods=252, initial_capital=data["initial_capital"]
+                )
             else:
-                st.success(f"**No rebalance needed until {date_str} ({days_str})**")
+                mc_results[name] = None
+    
+    st.write(f"**Current Total Portfolio Value:** ${total_current_portfolio:,.2f}")
+    st.write(f"**Monte Carlo Simulation Horizon:** 12 months (252 trading days)")
+    st.write(f"**Number of Simulations:** 100,000 per strategy")
+    
+    if any(v is not None for v in mc_results.values()):
+        mc_fig = plot_monte_carlo_results(mc_results, list(strategies_mc.keys()))
+        st.pyplot(mc_fig)
+        
+        st.subheader("Next 12-Month Simulated-Value")
+        terminal_value_data = []
+        for name, results in mc_results.items():
+            if results is not None:
+                terminal_value_data.append({
+                    "Strategy": name,
+                    "Current Value": f"${results['initial_price']:,.2f}",
+                    "Expected Value": f"${np.mean(results['terminal_values']):,.2f}",
+                    "5th %ile (Worst 5%)": f"${results['terminal_value_percentiles'][0]:,.2f}",
+                    "25th %ile": f"${results['terminal_value_percentiles'][1]:,.2f}",
+                    "Median": f"${results['terminal_value_percentiles'][2]:,.2f}",
+                    "75th %ile": f"${results['terminal_value_percentiles'][3]:,.2f}",
+                    "95th %ile (Best 5%)": f"${results['terminal_value_percentiles'][4]:,.2f}",
+                })
+        
+        if terminal_value_data:
+            terminal_value_df = pd.DataFrame(terminal_value_data)
+            st.dataframe(terminal_value_df, use_container_width=True)
+        
+        st.subheader("Next 12-Month Simulated-Returns(%)")
+        return_data = []
+        for name, results in mc_results.items():
+            if results is not None:
+                return_data.append({
+                    "Strategy": name,
+                    "Expected Return": f"{results['expected_return']:.1%}",
+                    "5th %ile": f"{np.percentile(results['terminal_returns'], 5):.1%}",
+                    "25th %ile": f"{np.percentile(results['terminal_returns'], 25):.1%}",
+                    "Median": f"{np.percentile(results['terminal_returns'], 50):.1%}",
+                    "75th %ile": f"{np.percentile(results['terminal_returns'], 75):.1%}",
+                    "95th %ile": f"{np.percentile(results['terminal_returns'], 95):.1%}",
+                    "Prob > 0%": f"{results['prob_positive']:.1%}",
+                    "CVaR 95%": f"{results['cvar_95']:.1%}"
+                })
+        
+        if return_data:
+            return_df = pd.DataFrame(return_data)
+            st.dataframe(return_df, use_container_width=True)
             
-            # Show progress table
-            progress_df = pd.DataFrame.from_dict(progress, orient='index', columns=['Value'])
-            progress_df.loc["Gap (%)"] = f"{progress['Gap (%)']:.2%}"
-            st.dataframe(progress_df)
-        
-        # Allocation tables
-        st.subheader("💼 Portfolio Allocations")
-        
-        hyb_r = float(hybrid_rw.iloc[-1]) if len(hybrid_rw) > 0 else 0
-        hyb_s = float(hybrid_sw.iloc[-1]) if len(hybrid_sw) > 0 else 0
-        pure_r = float(pure_sig_rw.iloc[-1]) if len(pure_sig_rw) > 0 else 0
-        pure_s = float(pure_sig_sw.iloc[-1]) if len(pure_sig_sw) > 0 else 0
-        
-        def compute_allocations(account_value, risky_w, safe_w, ron_w, roff_w):
-            risky_dollars = account_value * risky_w
-            safe_dollars = account_value * safe_w
-            alloc = {"Total Risky $": risky_dollars, "Total Safe $": safe_dollars}
-            for t, w in ron_w.items():
-                alloc[t] = risky_dollars * w
-            for t, w in roff_w.items():
-                alloc[t] = safe_dollars * w
-            return alloc
-        
-        tab1, tab2, tab3 = st.tabs(["Sigma", "SIG", "200 Day SMA"])
-        with tab1:
-            alloc = compute_allocations(real_cap_1, hyb_r, hyb_s, risk_on_weights, risk_off_weights)
-            alloc_df = pd.DataFrame.from_dict(alloc, orient="index", columns=["$"])
-            total = alloc_df["$"].sum()
-            alloc_df["% Portfolio"] = (alloc_df["$"] / total * 100).apply(lambda x: f"{x:.2f}%")
-            st.dataframe(alloc_df)
-        
-        with tab2:
-            alloc = compute_allocations(real_cap_1, pure_r, pure_s, risk_on_weights, risk_off_weights)
-            alloc_df = pd.DataFrame.from_dict(alloc, orient="index", columns=["$"])
-            total = alloc_df["$"].sum()
-            alloc_df["% Portfolio"] = (alloc_df["$"] / total * 100).apply(lambda x: f"{x:.2f}%")
-            st.dataframe(alloc_df)
-        
-        with tab3:
-            if latest_signal:
-                alloc = compute_allocations(real_cap_1, 1.0, 0.0, risk_on_weights, {"SHY": 0})
-            else:
-                alloc = compute_allocations(real_cap_1, 0.0, 1.0, {}, risk_off_weights)
-            alloc_df = pd.DataFrame.from_dict(alloc, orient="index", columns=["$"])
-            total = alloc_df["$"].sum()
-            alloc_df["% Portfolio"] = (alloc_df["$"] / total * 100).apply(lambda x: f"{x:.2f}%")
-            st.dataframe(alloc_df)
-        
-        # MA distance
-        st.subheader("📐 200-Day SMA Crossover Distance")
-        if len(opt_ma) > 0 and len(portfolio_index) > 0:
-            latest_date = opt_ma.dropna().index[-1]
-            P = float(portfolio_index.loc[latest_date])
-            MA = float(opt_ma.loc[latest_date])
-            upper = MA * (1 + tolerance_decimal)
-            lower = MA * (1 - tolerance_decimal)
+            st.subheader("Key Insights from Monte Carlo")
+            col1, col2, col3 = st.columns(3)
+            valid_results = [(name, r) for name, r in mc_results.items() if r is not None]
             
-            if latest_signal:
-                delta = (P - lower) / P
-                st.info(f"**Drop Required for Crossover:** {delta:.2%}")
-            else:
-                delta = (upper - P) / P
-                st.info(f"**Gain Required for Crossover:** {delta:.2%}")
-        
-        # Monte Carlo Analysis
-        st.subheader("🎲 Monte Carlo Stress Testing")
-        
-        total_current_portfolio = real_cap_1
-        strategies_mc = {
-            "MA Strategy": {"returns": best_result["returns"], "equity": best_result["equity_curve"], "initial_capital": total_current_portfolio},
-            "Buy & Hold": {"returns": risk_on_simple, "equity": risk_on_eq, "initial_capital": total_current_portfolio},
-            "Sigma": {"returns": hybrid_simple, "equity": hybrid_eq, "initial_capital": total_current_portfolio},
-        }
-        
-        with st.spinner("Running Monte Carlo simulations..."):
-            mc_results = {}
-            for name, data in strategies_mc.items():
-                if len(data["returns"]) > 100:
-                    mc_results[name] = monte_carlo_strategy_analysis(
-                        data["returns"], data["equity"], n_sim=5000, periods=252, initial_capital=data["initial_capital"]
-                    )
-            
-            if any(v is not None for v in mc_results.values()):
-                mc_fig = plot_monte_carlo_results(mc_results, list(strategies_mc.keys()))
-                st.pyplot(mc_fig)
-                
-                # Show key insights
-                st.subheader("📈 Key Insights")
-                cols = st.columns(3)
-                valid_results = [(name, r) for name, r in mc_results.items() if r is not None]
-                
-                if valid_results:
-                    with cols[0]:
-                        safest = min(valid_results, key=lambda x: x[1]['cvar_95'])
-                        st.metric("Most Conservative", safest[0])
-                    with cols[1]:
-                        highest_return = max(valid_results, key=lambda x: x[1]['expected_return'])
-                        st.metric("Highest Expected Return", highest_return[0])
-                    with cols[2]:
-                        highest_prob = max(valid_results, key=lambda x: x[1]['prob_positive'])
-                        st.metric("Highest Win Probability", f"{highest_prob[1]['prob_positive']:.1%}")
-        
-        # Strategy diagnostics
-        st.subheader("🔍 Strategy Diagnostics")
-        diag_fig = plot_diagnostics(hybrid_eq=hybrid_eq, bh_eq=risk_on_eq, hybrid_signal=sig)
-        st.pyplot(diag_fig)
-        
-    except Exception as e:
-        st.error(f"Error during analysis: {str(e)}")
-        st.info("Please check your inputs and try again.")
+            if valid_results:
+                with col1:
+                    safest = min(valid_results, key=lambda x: x[1]['cvar_95'])
+                    st.metric("Most Conservative", safest[0])
+                with col2:
+                    highest_return = max(valid_results, key=lambda x: x[1]['expected_return'])
+                    st.metric("Highest Expected Return", highest_return[0])
+                with col3:
+                    highest_prob = max(valid_results, key=lambda x: x[1]['prob_positive'])
+                    st.metric("Highest Probability of Positive Return", highest_prob[0])
+                    
+                    st.write("#### Worst-Case Scenario Analysis (12-Month Horizon)")
+                    worst_cases = []
+                    for name, results in valid_results:
+                        worst_5 = np.percentile(results['terminal_returns'], 5)
+                        worst_1 = np.percentile(results['terminal_returns'], 1)
+                        worst_cases.append({
+                            "Strategy": name,
+                            "5th Percentile (Bad Year)": worst_5,
+                            "1st Percentile (Very Bad Year)": worst_1,
+                            "Average in Worst 5% (CVaR 95%)": -results['cvar_95'],
+                            "Average in Worst 1% (CVaR 99%)": -results['cvar_99']
+                        })
+                    
+                    worst_case_df = pd.DataFrame(worst_cases)
+                    st.dataframe(worst_case_df.style.format({
+                        "5th Percentile (Bad Year)": "{:.2%}",
+                        "1st Percentile (Very Bad Year)": "{:.2%}",
+                        "Average in Worst 5% (CVaR 95%)": "{:.2%}",
+                        "Average in Worst 1% (CVaR 99%)": "{:.2%}"
+                    }), use_container_width=True)
 
 # ============================================================
-# APP ENTRY POINT
+# LAUNCH APP
 # ============================================================
 
 if __name__ == "__main__":

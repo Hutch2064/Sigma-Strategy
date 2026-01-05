@@ -74,13 +74,62 @@ def init_auth_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_password_resets_expires ON password_resets(expires_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_login_attempts_time ON login_attempts(attempt_time)")
-        
+        # Persistent auth tokens
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS auth_tokens (
+            token_hash TEXT PRIMARY KEY,
+            username TEXT NOT NULL,
+            expires_at TIMESTAMP NOT NULL,
+            FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
+        )
+        """)
 init_auth_db()
 
 # ============================================================
 # SECURITY & AUTHENTICATION FUNCTIONS
 # ============================================================
+AUTH_TOKEN_DAYS = 30  # persistent login duration
 
+
+def create_auth_token(username: str) -> str:
+    raw = secrets.token_urlsafe(48)
+    token_hash = hashlib.sha256(raw.encode()).hexdigest()
+    expires = datetime.utcnow() + timedelta(days=AUTH_TOKEN_DAYS)
+
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM auth_tokens WHERE username = ?",
+            (username,)
+        )
+        conn.execute(
+            """INSERT INTO auth_tokens (token_hash, username, expires_at)
+               VALUES (?, ?, ?)""",
+            (token_hash, username, expires)
+        )
+    return raw
+
+
+def validate_auth_token(raw_token: str):
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    now = datetime.utcnow()
+
+    with get_db() as conn:
+        row = conn.execute(
+            """SELECT username FROM auth_tokens
+               WHERE token_hash = ? AND expires_at > ?""",
+            (token_hash, now)
+        ).fetchone()
+
+    return row[0] if row else None
+
+
+def revoke_auth_token(raw_token: str):
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM auth_tokens WHERE token_hash = ?",
+            (token_hash,)
+        )
 def hash_password(password: str) -> str:
     """Hash password with bcrypt"""
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
@@ -886,20 +935,40 @@ def plot_monte_carlo_results(results_dict, strategy_names):
     plt.tight_layout()
     return fig
 
-def restore_session_from_db():
-    if "authenticated" in st.session_state and st.session_state.authenticated:
+def restore_session_from_token():
+    if st.session_state.get("authenticated"):
         return
 
-    username = st.session_state.get("username")
+    token = st.session_state.get("auth_token")
+    if not token:
+        return
+
+    username = validate_auth_token(token)
     if not username:
         return
 
     user = get_user(username)
-    if user and user[5] == 1:  # is_active
+    if user and user[5] == 1:
         st.session_state.authenticated = True
+        st.session_state.username = username
         st.session_state.name = user[1]
         st.session_state.prefs = load_user_prefs(username)
 
+def sync_auth_token_from_browser():
+    st.components.v1.html(
+        """
+        <script>
+        const token = localStorage.getItem("sigma_auth_token");
+        if (token) {
+            window.parent.postMessage(
+                { type: "AUTH_TOKEN", token: token },
+                "*"
+            );
+        }
+        </script>
+        """,
+        height=0
+    )
 # ============================================================
 # STREAMLIT APP - MAIN FUNCTION
 # ============================================================
@@ -911,6 +980,10 @@ def main():
         page_icon="📈"
     )
     params = st.query_params
+    sync_auth_token_from_browser()
+
+    if "auth_token" not in st.session_state:
+        st.session_state.auth_token = None
     
     # Initialize session state
     if "authenticated" not in st.session_state:
@@ -920,7 +993,7 @@ def main():
     if "name" not in st.session_state:
         st.session_state.name = None
 
-    restore_session_from_db()
+    restore_session_from_token()
     
     # Password reset
     if "reset" in params:
@@ -979,12 +1052,26 @@ def main():
                                 st.error("Account is disabled. Please contact support.")
                             elif verify_password(password, user_data[3]):
                                 update_last_login(username)
+
+                                token = create_auth_token(username)
+
                                 st.session_state.update({
                                     "authenticated": True,
                                     "username": username,
                                     "name": user_data[1],
-                                    "prefs": load_user_prefs(username)
+                                    "prefs": load_user_prefs(username),
+                                    "auth_token": token
                                 })
+
+                                st.components.v1.html(
+                                    f"""
+                                    <script>
+                                    localStorage.setItem("sigma_auth_token", "{token}");
+                                    </script>
+                                    """,
+                                    height=0
+                                )
+
                                 st.success(f"Welcome back, {user_data[1]}!")
                                 st.rerun()
                             else:
